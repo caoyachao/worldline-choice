@@ -44,6 +44,11 @@ class GameState:
         self.ending_triggered = False
         self.ending_type = None
         
+        # 代价追踪（用于记录使用特殊选项的代价）
+        self.costs_paid = []  # 已支付的代价列表
+        self.moral_corruption = 0  # 道德腐化值（0-100）
+        self.broken_trust = []  # 被破坏信任的关系列表
+        
     def to_dict(self) -> Dict:
         """序列化为字典"""
         return {
@@ -57,7 +62,10 @@ class GameState:
             "flags": self.flags,
             "history": self.history,
             "ending_triggered": self.ending_triggered,
-            "ending_type": self.ending_type
+            "ending_type": self.ending_type,
+            "costs_paid": self.costs_paid,
+            "moral_corruption": self.moral_corruption,
+            "broken_trust": self.broken_trust
         }
     
     @classmethod
@@ -75,6 +83,9 @@ class GameState:
         state.history = data.get("history", [])
         state.ending_triggered = data.get("ending_triggered", False)
         state.ending_type = data.get("ending_type", None)
+        state.costs_paid = data.get("costs_paid", [])
+        state.moral_corruption = data.get("moral_corruption", 0)
+        state.broken_trust = data.get("broken_trust", [])
         return state
     
     def update_npc(self, name: str, **kwargs):
@@ -204,7 +215,14 @@ class WorldlineEngine:
 【选项设计原则】
 - 不按性格分类，按剧情方向设计
 - 每个选项代表实质不同的分支（支持某方/选择方法/道德立场）
-- 可以包含基于状态的D选项（特殊条件触发）
+- A/B/C选项必须有真实的权衡，没有"完美"选择，每个都有代价
+- D选项（特殊路线）设计规则：
+  * 只有在玩家拥有特定标签/物品/关系时才显示
+  * 不应该是"完美解决方案"，而是有代价的双刃剑
+  * 可能比常规选项更高效，但会牺牲某些东西（道德、关系、未来选项、永久属性）
+  * 可能带来隐藏风险或意想不到的负面后果
+  * 示例：用黑魔法快速解决问题但获得【腐化】标签；背叛盟友获得短期利益但永久损失信任；使用禁忌力量拯救现在但失去未来某种可能性
+  * D选项的hint应该暗示这种代价或风险
 
 【输出格式】
 返回JSON格式：
@@ -285,6 +303,9 @@ class WorldlineEngine:
 - 关键选择: {[h['action'] for h in self.state.history]}
 - 持有物品: {self.state.player['items']}
 - 性格标签: {self.state.player['tags']}
+- 已支付的代价: {self.state.costs_paid}
+- 道德腐化值: {self.state.moral_corruption}/100
+- 被破坏的信任: {self.state.broken_trust}
 
 【结局判定】
 根据玩家的整体行为和选择，判断最符合的结局类型：
@@ -375,6 +396,24 @@ class WorldlineEngine:
         flags_set = ai_response.get("flags_set", {})
         self.state.flags.update(flags_set)
         
+        # 处理D选项（特殊路线）的代价
+        # 如果这次行动是D选项，记录其代价
+        if "使用了D选项" in player_input or "特殊路线" in player_input:
+            cost = consequences.get("special_cost")
+            if cost:
+                self.state.costs_paid.append({
+                    "turn": self.state.turn_count,
+                    "cost": cost,
+                    "action": player_input
+                })
+                # 如果是道德代价，增加腐化值
+                if isinstance(cost, dict):
+                    if "腐化" in cost or "道德" in cost:
+                        self.state.moral_corruption += cost.get("value", 10)
+                    if "背叛" in cost or "信任" in cost:
+                        npc = cost.get("npc", "未知")
+                        self.state.broken_trust.append(npc)
+        
         # 检查结局
         if ai_response.get("ending_triggered"):
             self.state.ending_triggered = True
@@ -405,7 +444,10 @@ class WorldlineEngine:
             "npcs": self.state.npcs,
             "flags": self.state.flags,
             "items": self.state.player["items"],
-            "tags": self.state.player["tags"]
+            "tags": self.state.player["tags"],
+            "costs_paid": self.state.costs_paid,
+            "moral_corruption": self.state.moral_corruption,
+            "broken_trust": self.state.broken_trust
         }
     
     def save_game(self, save_id: str) -> str:
