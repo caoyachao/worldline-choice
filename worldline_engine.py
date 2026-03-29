@@ -254,16 +254,58 @@ class WorldlineEngine:
 【玩家行动】
 {player_input}
 
+【可行性评估原则 - 严格客观】
+评估可行性时必须完全基于客观事实，不刻意迎合也不刻意刁难：
+
+1. **客观能力检查**
+   - 玩家是否有执行此行动所需的技能/能力？
+   - 玩家属性是否达到行动要求？（如武力15以上才能单挑精英守卫）
+   - 玩家是否拥有必要物品？（如开锁需要工具，飞行需要坐骑）
+
+2. **情境限制检查**
+   - 当前环境是否允许此行动？（如在密闭空间无法召唤大型生物）
+   - 时间是否充裕？（如3分钟内无法完成需要1小时的仪式）
+   - 是否有物理限制？（如无绳索无法攀爬光滑岩壁）
+
+3. **信息掌握检查**
+   - 玩家是否知道执行此行动所需的信息？
+   - 不能假设玩家知道未发现的秘密或NPC的真实身份
+   - 尝试利用未知信息应失败或产生意外后果
+
+4. **合理性评估**
+   - 行动是否符合游戏世界的基本逻辑和物理法则？
+   - 新手不可能瞬间击败大师，凡人不能随意撼动神祇
+   - 社会关系不能瞬间逆转（敌视→信任需要时间）
+
+5. **难度分级**
+   - 简单：玩家能力明显足够，高成功率
+   - 困难：玩家能力勉强，需要检定或有失败风险
+   - 极难：玩家能力不足，几乎不可能成功
+   - 不可能：完全超出玩家能力范围，明确拒绝
+
+【重要原则】
+- 不刻意迎合：不能因为玩家想这么做就让其轻易成功
+- 不刻意刁难：不能因为玩家想这么做就故意使其失败
+- 客观公正：基于事实判断，让玩家为自己的选择承担真实后果
+- 失败也有趣：失败应该产生有意义的后果，而非简单的"你失败了"
+
+【处理方式】
+- 可行：正常执行，根据难度决定成功程度
+- 困难但可行：执行但伴随高风险或负面后果
+- 不可行：明确告知为什么不可行，并提供合理化的替代方案
+- 部分可行：行动部分成功，但效果打折或有意外代价
+
 【处理要求】
 1. 解析玩家意图（行动类型：战斗/对话/观察/物品/移动/其他）
-2. 判断行动在当前情境下的合理性和可行性
-3. 推演行动的直接后果和长期影响
+2. 基于上述原则严格评估可行性
+3. 推演行动的直接后果和长期影响（成功或失败都有后果）
 4. 更新相关状态（属性变化、关系变化、获得物品、触发事件）
 5. 判断是否触发结局条件
 
 【状态更新规则】
 - 成功行动可能提升相关属性或关系
-- 失败或鲁莽行动可能带来负面后果
+- 失败或鲁莽行动会带来真实的负面后果
+- 超出能力的尝试可能导致受伤、损失物品或关系恶化
 - 关键行动会添加剧情标记(flags)
 - 每次行动推进回合数
 
@@ -449,6 +491,68 @@ class WorldlineEngine:
             "moral_corruption": self.state.moral_corruption,
             "broken_trust": self.state.broken_trust
         }
+    
+    def check_feasibility(self, action: Dict) -> Dict:
+        """
+        客观可行性检查辅助方法
+        返回可行性评估结果
+        """
+        result = {
+            "feasible": True,
+            "difficulty": "简单",  # 简单/困难/极难/不可能
+            "requirements": [],
+            "missing": [],
+            "warnings": []
+        }
+        
+        # 检查属性要求
+        attr_requirements = action.get("required_attributes", {})
+        for attr, min_value in attr_requirements.items():
+            current = self.state.player["attributes"].get(attr, 0)
+            if current < min_value:
+                result["missing"].append(f"{attr}需要{min_value}，当前{current}")
+                result["feasible"] = False
+        
+        # 检查物品要求
+        required_items = action.get("required_items", [])
+        for item in required_items:
+            if item not in self.state.player["items"]:
+                result["missing"].append(f"需要物品：{item}")
+                result["feasible"] = False
+        
+        # 检查标签要求
+        required_tags = action.get("required_tags", [])
+        for tag in required_tags:
+            if tag not in self.state.player["tags"]:
+                result["missing"].append(f"需要标签：{tag}")
+                result["feasible"] = False
+        
+        # 检查关系要求
+        required_relationships = action.get("required_relationships", {})
+        for npc, min_rel in required_relationships.items():
+            current = self.state.npcs.get(npc, {}).get("relationship", 0)
+            if current < min_rel:
+                result["missing"].append(f"与{npc}的关系需要{min_rel}，当前{current}")
+                result["feasible"] = False
+        
+        # 检查知识要求
+        required_secrets = action.get("required_secrets", [])
+        for secret in required_secrets:
+            if secret not in self.state.player["secrets"]:
+                result["missing"].append(f"需要知道：{secret}")
+                result["warnings"].append("尝试使用未知信息")
+        
+        # 确定难度
+        if result["missing"]:
+            missing_count = len(result["missing"])
+            if missing_count >= 3:
+                result["difficulty"] = "不可能"
+            elif missing_count == 2:
+                result["difficulty"] = "极难"
+            elif missing_count == 1:
+                result["difficulty"] = "困难"
+        
+        return result
     
     def save_game(self, save_id: str) -> str:
         """保存游戏"""
