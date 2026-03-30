@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Worldline Choice - AI驱动互动叙事游戏引擎 v3.1
+Worldline Choice - AI驱动互动叙事游戏引擎 v3.2
 通用挑战框架版 - 严格检定系统，适应任何世界观
 新增：叙事取巧检测（编造资源、跳过检定）
+新增：复合行动分步检定系统
 """
 
 import json
@@ -594,6 +595,320 @@ class UniversalChallengeEngine:
         
         return items
     
+    # ========== 复合行动（分步检定）支持 ==========
+    
+    # 复合行动关键词模式
+    COMPOSITE_PATTERNS = [
+        # 先...然后...
+        r'先(.+?)(?:然后|接着|再|之后|随后)(.+?)(?:$|最后|最终)',
+        # 一边...一边...
+        r'(?:一边|一面)(.+?)(?:一边|一面)(.+?)$',
+        # 用...来...
+        r'用(.+?)来(.+?)(?:然后|接着|$)',
+        # 先...再...
+        r'先(.+?)再(.+?)$',
+        # ...之后...
+        r'(.+?)(?:之后|以后|随后|接着)(.+?)$',
+    ]
+    
+    def is_composite_action(self, action_text: str) -> bool:
+        """
+        检测是否为复合行动（包含多个步骤）
+        """
+        action_clean = action_text.lower().replace(' ', '').replace('，', ',')
+        
+        for pattern in self.COMPOSITE_PATTERNS:
+            if re.search(pattern, action_clean):
+                return True
+        
+        # 检测明确的顺序连接词
+        sequence_markers = ['先', '然后', '接着', '再', '之后', '随后', '最后', '最终', 
+                           '先', '再', '又', '同时', '一边', '一面']
+        marker_count = sum(1 for marker in sequence_markers if marker in action_clean)
+        
+        # 如果有2个及以上的顺序标记，认为是复合行动
+        return marker_count >= 2
+    
+    def parse_composite_action(self, action_text: str) -> List[Dict]:
+        """
+        解析复合行动为多个步骤
+        返回步骤列表，每个步骤包含行动描述、类型、属性等
+        """
+        action_clean = action_text.lower().replace(' ', '').replace('，', ',')
+        steps = []
+        
+        # 尝试匹配各种复合模式
+        for pattern in self.COMPOSITE_PATTERNS:
+            match = re.search(pattern, action_clean)
+            if match:
+                groups = match.groups()
+                for i, group in enumerate(groups):
+                    if group and group.strip():
+                        step_info = self._analyze_step(group.strip(), i)
+                        steps.append(step_info)
+                break
+        
+        # 如果没有匹配到模式，使用简单的分割
+        if not steps:
+            steps = self._simple_step_split(action_clean)
+        
+        return steps
+    
+    def _analyze_step(self, step_text: str, step_index: int) -> Dict:
+        """
+        分析单个步骤
+        """
+        profile = self.analyze_action(step_text)
+        
+        # 确定步骤类型和目的
+        purpose = self._determine_step_purpose(step_text, step_index)
+        
+        return {
+            "index": step_index,
+            "text": step_text,
+            "action_type": profile.action_type,
+            "primary_attribute": profile.primary_attribute,
+            "secondary_attribute": profile.secondary_attribute,
+            "target": profile.target,
+            "purpose": purpose,
+            "base_dc": self._calculate_step_base_dc(profile, purpose)
+        }
+    
+    def _determine_step_purpose(self, step_text: str, step_index: int) -> str:
+        """
+        确定步骤的目的（攻击、防御、干扰、逃跑等）
+        """
+        step_lower = step_text.lower()
+        
+        # 干扰/牵制
+        if any(w in step_lower for w in ["干扰", "牵制", "吸引", "分散", "迷惑", "引开", "骚扰"]):
+            return "干扰"
+        
+        # 逃跑/脱离
+        if any(w in step_lower for w in ["逃", "跑", "离开", "脱离", "撤退", "撤离", "躲", "藏"]):
+            return "逃跑"
+        
+        # 攻击
+        if any(w in step_lower for w in ["打", "杀", "攻", "击", "射", "砍", "刺", "投", "扔"]):
+            return "攻击"
+        
+        # 防御
+        if any(w in step_lower for w in ["挡", "防", "格挡", "闪避", "躲", "护"]):
+            return "防御"
+        
+        # 辅助/准备
+        if any(w in step_lower for w in ["准备", "布置", "设置", "拿", "取", "掏"]):
+            return "准备"
+        
+        # 探索/观察
+        if any(w in step_lower for w in ["看", "观察", "寻找", "找", "探"]):
+            return "探索"
+        
+        return "其他"
+    
+    def _calculate_step_base_dc(self, profile: ActionProfile, purpose: str) -> int:
+        """
+        计算步骤的基础DC
+        根据步骤目的调整难度
+        """
+        base_dc = 10
+        
+        # 不同目的的基础难度
+        purpose_modifiers = {
+            "准备": -2,    # 准备动作相对简单
+            "探索": 0,     # 探索标准难度
+            "干扰": 2,     # 干扰需要技巧
+            "攻击": 0,     # 攻击标准难度
+            "防御": 0,     # 防御标准难度
+            "逃跑": 2,     # 逃跑需要考虑时机
+            "其他": 0
+        }
+        
+        modifier = purpose_modifiers.get(purpose, 0)
+        return max(5, base_dc + modifier)  # 最低DC为5
+    
+    def _simple_step_split(self, action_text: str) -> List[Dict]:
+        """
+        简单分割复合行动（当正则无法匹配时使用）
+        """
+        # 使用常见连接词分割
+        separators = ['然后', '接着', '再', '之后', '随后', '最后', '同时']
+        
+        steps = []
+        remaining = action_text
+        
+        for i, sep in enumerate(separators):
+            if sep in remaining:
+                parts = remaining.split(sep, 1)
+                if len(parts) == 2:
+                    step_info = self._analyze_step(parts[0].strip(), len(steps))
+                    steps.append(step_info)
+                    remaining = parts[1].strip()
+        
+        # 添加最后一步
+        if remaining:
+            step_info = self._analyze_step(remaining, len(steps))
+            steps.append(step_info)
+        
+        return steps if steps else [self._analyze_step(action_text, 0)]
+    
+    def execute_composite_check(self, steps: List[Dict], target: str = None) -> Dict:
+        """
+        执行复合行动的分步检定
+        
+        策略逻辑：
+        - 干扰成功 → 后续逃跑/攻击DC降低
+        - 干扰失败 → 后续行动DC提高（敌人警觉）
+        - 准备成功 → 后续攻击DC降低
+        """
+        step_results = []
+        cumulative_effects = {
+            "dc_modifier": 0,      # DC修正值（可累积）
+            "alert_level": 0,      # 敌人警觉度
+            "opportunity": False   # 是否创造机会
+        }
+        
+        for step in steps:
+            # 应用累积效果到当前步骤DC
+            adjusted_dc = step["base_dc"] + cumulative_effects["dc_modifier"]
+            
+            # 执行检定
+            profile = ActionProfile(
+                raw_action=step["text"],
+                action_type=step["action_type"],
+                primary_attribute=step["primary_attribute"],
+                secondary_attribute=step["secondary_attribute"],
+                target=target,
+                environment_factor=0,
+                time_pressure=cumulative_effects["alert_level"]
+            )
+            
+            check_result = self.execute_check(profile, adjusted_dc)
+            
+            # 记录结果
+            step_result = {
+                "step_index": step["index"],
+                "step_text": step["text"],
+                "purpose": step["purpose"],
+                "check": check_result.to_dict(),
+                "dc": adjusted_dc,
+                "success": check_result.success,
+                "degree": check_result.degree
+            }
+            step_results.append(step_result)
+            
+            # 更新累积效果
+            self._update_cumulative_effects(cumulative_effects, step["purpose"], check_result)
+        
+        # 计算整体结果
+        overall_success = all(r["success"] for r in step_results)
+        overall_degree = self._calculate_composite_degree(step_results)
+        
+        return {
+            "is_composite": True,
+            "step_count": len(steps),
+            "steps": step_results,
+            "overall_success": overall_success,
+            "overall_degree": overall_degree,
+            "cumulative_effects": cumulative_effects,
+            "narrative": self._generate_composite_narrative(step_results)
+        }
+    
+    def _update_cumulative_effects(self, effects: Dict, purpose: str, check_result: CheckResult):
+        """
+        根据步骤结果更新累积效果
+        """
+        if purpose == "干扰":
+            if check_result.success:
+                # 干扰成功，敌人被牵制
+                effects["dc_modifier"] -= 3  # 后续DC降低
+                effects["opportunity"] = True
+            else:
+                # 干扰失败，敌人警觉
+                effects["alert_level"] += 3
+                effects["dc_modifier"] += 2  # 后续DC提高
+        
+        elif purpose == "准备":
+            if check_result.success:
+                # 准备充分
+                effects["dc_modifier"] -= 2
+            else:
+                # 准备不足
+                effects["dc_modifier"] += 1
+        
+        elif purpose == "探索":
+            if check_result.success and check_result.degree in ["大成功", "成功"]:
+                # 发现有利信息
+                effects["dc_modifier"] -= 1
+        
+        elif purpose == "逃跑":
+            if not check_result.success:
+                # 逃跑失败会增加危险
+                effects["alert_level"] += 5
+    
+    def _calculate_composite_degree(self, step_results: List[Dict]) -> str:
+        """
+        计算复合行动的整体成功程度
+        """
+        success_count = sum(1 for r in step_results if r["success"])
+        total_count = len(step_results)
+        
+        # 有大失败直接整体大失败
+        if any(r["degree"] == "大失败" for r in step_results):
+            return "大失败"
+        
+        # 全成功
+        if success_count == total_count:
+            # 检查是否有大成功
+            if any(r["degree"] == "大成功" for r in step_results):
+                return "大成功"
+            if all(r["degree"] == "成功" for r in step_results):
+                return "成功"
+            return "勉强成功"
+        
+        # 部分成功
+        if success_count >= total_count / 2:
+            return "部分成功"
+        
+        # 大部分失败
+        if success_count == 0:
+            if any(r["degree"] == "大失败" for r in step_results):
+                return "大失败"
+            return "失败"
+        
+        return "勉强失败"
+    
+    def _generate_composite_narrative(self, step_results: List[Dict]) -> str:
+        """
+        生成分步检定的叙述
+        """
+        narratives = []
+        
+        for i, result in enumerate(step_results):
+            step_text = result["step_text"]
+            degree = result["degree"]
+            purpose = result["purpose"]
+            
+            # 根据目的和结果生成叙述
+            if purpose == "干扰":
+                if degree in ["大成功", "成功"]:
+                    narratives.append(f"第{i+1}步（干扰）：你成功分散了敌人的注意力")
+                elif degree == "勉强成功":
+                    narratives.append(f"第{i+1}步（干扰）：干扰起效，但引起了警觉")
+                else:
+                    narratives.append(f"第{i+1}步（干扰）：干扰失败，敌人更加警惕")
+            
+            elif purpose == "逃跑":
+                if degree in ["大成功", "成功"]:
+                    narratives.append(f"第{i+1}步（逃跑）：你顺利逃脱")
+                else:
+                    narratives.append(f"第{i+1}步（逃跑）：逃跑受阻")
+            
+            else:
+                narratives.append(f"第{i+1}步：{step_text} - {degree}")
+        
+        return " | ".join(narratives)
+    
     def check_hard_limits(self, action_profile: ActionProfile) -> Dict:
         """
         检查是否违反硬边界
@@ -1045,11 +1360,16 @@ class UniversalChallengeEngine:
     def evaluate_action(self, action_text: str, context: Dict = None) -> Dict:
         """
         完整评估流程
+        支持复合行动（分步检定）
         """
-        # 1. 解析行动
+        # 1. 检查是否为复合行动
+        if self.is_composite_action(action_text):
+            return self._evaluate_composite_action(action_text, context)
+        
+        # 2. 解析行动
         profile = self.analyze_action(action_text, context)
         
-        # 2. 检查叙事取巧（编造资源、跳过检定）
+        # 3. 检查叙事取巧（编造资源、跳过检定）
         cheese_check = self.check_narrative_cheese(action_text)
         if cheese_check["blocked"]:
             return {
@@ -1062,7 +1382,7 @@ class UniversalChallengeEngine:
                 "action_profile": profile.to_dict()
             }
         
-        # 3. 检查硬边界
+        # 4. 检查硬边界
         hard_limit = self.check_hard_limits(profile)
         if hard_limit["blocked"]:
             return {
@@ -1074,16 +1394,16 @@ class UniversalChallengeEngine:
                 "action_profile": profile.to_dict()
             }
         
-        # 4. 计算难度
+        # 5. 计算难度
         difficulty = self.calculate_difficulty(profile)
         
-        # 5. 执行检定
+        # 6. 执行检定
         check_result = self.execute_check(profile)
         
-        # 6. 计算资源消耗
+        # 7. 计算资源消耗
         resource_costs = self.process_resource_cost(profile, check_result)
         
-        # 7. 生成结果
+        # 8. 生成结果
         return {
             "feasible": True,
             "action_profile": profile.to_dict(),
@@ -1092,8 +1412,86 @@ class UniversalChallengeEngine:
             "resource_costs": resource_costs,
             "success": check_result.success,
             "degree": check_result.degree,
-            "narrative_template": self._get_narrative_template(check_result, profile)
+            "narrative_template": self._get_narrative_template(check_result, profile),
+            "is_composite": False
         }
+    
+    def _evaluate_composite_action(self, action_text: str, context: Dict = None) -> Dict:
+        """
+        评估复合行动（分步检定）
+        """
+        # 1. 检查叙事取巧
+        cheese_check = self.check_narrative_cheese(action_text)
+        if cheese_check["blocked"]:
+            return {
+                "feasible": False,
+                "blocked": True,
+                "reason": cheese_check["reason"],
+                "type": cheese_check.get("type"),
+                "cheese_type": cheese_check.get("cheese_type"),
+                "suggestion": cheese_check.get("suggestion")
+            }
+        
+        # 2. 解析复合行动为多个步骤
+        steps = self.parse_composite_action(action_text)
+        
+        # 3. 识别目标（用于所有步骤）
+        profile = self.analyze_action(action_text, context)
+        target = profile.target
+        
+        # 4. 执行分步检定
+        composite_result = self.execute_composite_check(steps, target)
+        
+        # 5. 计算资源消耗（复合行动消耗更多）
+        resource_costs = self._calculate_composite_resource_cost(composite_result)
+        
+        # 6. 组装结果
+        return {
+            "feasible": True,
+            "is_composite": True,
+            "composite_result": composite_result,
+            "step_count": composite_result["step_count"],
+            "steps": composite_result["steps"],
+            "overall_success": composite_result["overall_success"],
+            "overall_degree": composite_result["overall_degree"],
+            "check_result": {
+                "success": composite_result["overall_success"],
+                "degree": composite_result["overall_degree"],
+                # 使用第一步的掷骰作为代表
+                "roll": composite_result["steps"][0]["check"]["roll"] if composite_result["steps"] else 10,
+                "modifier": 0,
+                "total": composite_result["steps"][0]["check"]["total"] if composite_result["steps"] else 10,
+                "difficulty": composite_result["steps"][0]["dc"] if composite_result["steps"] else 10,
+                "margin": 0,
+                "attribute": "COMPOSITE"
+            },
+            "resource_costs": resource_costs,
+            "narrative": composite_result["narrative"],
+            "action_profile": profile.to_dict()
+        }
+    
+    def _calculate_composite_resource_cost(self, composite_result: Dict) -> Dict[str, int]:
+        """
+        计算复合行动的资源消耗
+        复合行动消耗更多资源
+        """
+        step_count = composite_result["step_count"]
+        base_stamina_cost = 5 * step_count  # 每步5点体力
+        
+        # 根据结果调整
+        if composite_result["overall_degree"] == "大失败":
+            base_stamina_cost += 10
+        elif not composite_result["overall_success"]:
+            base_stamina_cost += 5
+        
+        costs = {"stamina": -base_stamina_cost}
+        
+        # 应用消耗
+        for resource, change in costs.items():
+            current = self.state.player["resources"].get(resource, 0)
+            self.state.player["resources"][resource] = max(0, current + change)
+        
+        return costs
     
     def _get_narrative_template(self, result: CheckResult, 
                                 profile: ActionProfile) -> str:
@@ -1323,11 +1721,13 @@ class WorldlineEngine:
             "success": success,
             "degree": degree,
             "evaluation": evaluation,
-            "narrative": narrative,
+            "narrative": evaluation.get("narrative") or narrative,
             "resources": self.state.player["resources"].copy(),
             "npc_action": npc_action,
             "turn": self.state.turn_count,
-            "can_retry": not success and degree != "大失败"
+            "can_retry": not success and degree != "大失败",
+            "is_composite": evaluation.get("is_composite", False),
+            "composite_result": evaluation.get("composite_result") if evaluation.get("is_composite") else None
         }
     
     def get_system_prompt(self) -> str:

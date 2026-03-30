@@ -1,25 +1,68 @@
 ---
 name: worldline-choice
-description: AI驱动互动叙事游戏引擎 v3.1 - 通用挑战框架版。严格d20检定系统，防止叙事取巧，确保真实挑战性。
+description: AI驱动互动叙事游戏引擎 v3.2 - 通用挑战框架版。严格d20检定系统，分步检定支持，防止叙事取巧，确保真实挑战性。
 ---
 
-# Worldline Choice v3.1 - 通用挑战框架版
+# Worldline Choice v3.2 - 通用挑战框架版
 
 ## 简介
 
 Worldline Choice 是一个**真正具有挑战性**的AI驱动互动叙事游戏引擎。
 
-与早期版本不同，v3.1引入了**通用挑战框架**：
+与早期版本不同，v3.2引入了**通用挑战框架**：
 - 不依赖AI"自觉"遵守规则，而是**强制检定系统**
 - **d20掷骰**决定结果，AI无法 override
+- **复合行动分步检定**，策略有意义
 - **硬边界规则**，明确阻止不可能的行动
 - **叙事取巧检测**，防止玩家编造资源/跳过检定
 - **资源消耗**，限制玩家无限尝试
 - **NPC主动性**，敌对NPC会主动反击
 
-## v3.1 新增特性
+## v3.2 新增：复合行动分步检定
 
-### 叙事取巧检测
+### 复合行动识别
+
+自动识别包含多个步骤的行动：
+
+| 模式 | 示例 |
+|------|------|
+| 先...然后... | 先发射暗器干扰，然后跳窗逃跑 |
+| 先...再... | 先观察弱点，再发起攻击 |
+| ...之后... | 投掷烟雾弹之后迅速撤离 |
+| 一边...一边... | 一边格挡一边寻找退路 |
+| 用...来... | 用暗器来干扰敌人视线 |
+
+### 分步检定机制
+
+**每步独立检定，结果相互影响**：
+
+```
+步骤1: 发射暗器干扰（DC 12）
+  ├─ 成功 → 敌人被牵制，步骤2 DC-3
+  └─ 失败 → 敌人警觉，步骤2 DC+2
+
+步骤2: 跳窗逃跑（DC 9或14）
+  ├─ 成功 → 顺利逃脱
+  └─ 失败 → 被抓住
+```
+
+**策略有意义**：
+- 干扰成功 → 逃跑更容易
+- 准备充分 → 攻击更准
+- 探索成功 → 发现有利信息
+
+### 步骤目的类型
+
+| 目的 | 成功效果 | 失败效果 |
+|------|----------|----------|
+| **干扰** | 后续DC-3 | 后续DC+2，警觉+ |
+| **准备** | 后续DC-2 | 后续DC+1 |
+| **探索** | 后续DC-1 | 无 |
+| **攻击** | 造成伤害 | 可能受伤 |
+| **逃跑** | 脱离战斗 | 危险+ |
+| **防御** | 减少伤害 | 受到伤害 |
+
+## v3.1 特性：叙事取巧检测
 
 自动检测并阻止以下行为：
 
@@ -29,17 +72,6 @@ Worldline Choice 是一个**真正具有挑战性**的AI驱动互动叙事游戏
 | **直接声明结果** | "我一剑就把山贼秒杀了" | 🚫 阻止 |
 | **凭空获得能力** | "我突然领悟绝世剑法" | 🚫 阻止 |
 | **正常描述行动** | "我拔剑攻击山贼" | ✅ 允许 |
-
-**检测机制**：
-- 正则表达式模式匹配
-- 资源存在性验证
-- 能力来源检查
-
-### 改进的属性差距检测
-
-- 阈值从30降低到**15**
-- 差距≥15点时自动阻止正面对抗
-- 建议寻找其他方法
 
 ## 核心特性
 
@@ -138,25 +170,18 @@ print(result['system_prompt'])  # 获取AI Prompt
 ### 处理玩家行动
 
 ```python
-# 玩家输入行动
+# 简单行动
 action = "我要和山贼头目战斗"
-
-# 引擎自动评估
 result = engine.process_player_action(action)
 
-# 结果包含：
-# - success: 是否成功
-# - degree: 成功/失败程度
-# - check_result: 检定详情（d20结果）
-# - resource_costs: 资源消耗
-# - npc_action: NPC反击（如果有）
+# 复合行动（自动分步检定）
+action = "先发射暗器干扰，然后跳窗逃跑"
+result = engine.process_player_action(action)
 
-if result['blocked']:
-    print(f"行动被阻止: {result['reason']}")
-    print(f"建议: {result['suggestion']}")
-else:
-    print(f"结果: {result['degree']}")
-    print(f"检定: d20={result['evaluation']['check_result']['roll']}")
+if result.get('is_composite'):
+    print(f"步骤数: {result['composite_result']['step_count']}")
+    for step in result['composite_result']['steps']:
+        print(f"  {step['purpose']}: {step['degree']}")
 ```
 
 ### AI Prompt 工作流程
@@ -164,14 +189,11 @@ else:
 1. **获取场景Prompt**
 ```python
 scene_prompt = engine.get_system_prompt()
-# 发送给AI生成场景描述和选项
 ```
 
 2. **处理玩家选择**
 ```python
-# 玩家选择后
 action_prompt = engine.get_action_prompt(player_input, evaluation)
-# 发送给AI生成剧情叙述
 ```
 
 3. **AI必须遵守的规则**
@@ -188,20 +210,6 @@ action_prompt = engine.get_action_prompt(player_input, evaluation)
 - 超出能力的尝试明确拒绝并提供替代方案
 - 资源耗尽时限制行动
 
-## 测试框架
-
-```bash
-python3 worldline_engine.py --test
-```
-
-测试内容包括：
-- 行动解析
-- 难度计算
-- 检定执行（多次掷骰）
-- 硬边界阻止
-- 叙事取巧检测
-- NPC主动性
-
 ## 技术架构
 
 ### 核心类
@@ -211,37 +219,24 @@ WorldlineEngine          # 主引擎
 ├── GameState           # 游戏状态管理
 ├── UniversalChallengeEngine  # 通用挑战引擎
 │   ├── analyze_action()      # 行动解析
+│   ├── is_composite_action() # 复合行动检测 (v3.2)
+│   ├── parse_composite_action() # 分步解析 (v3.2)
+│   ├── execute_composite_check() # 分步检定 (v3.2)
 │   ├── check_hard_limits()   # 硬边界检查
-│   ├── check_narrative_cheese() # 叙事取巧检测 (v3.1新增)
+│   ├── check_narrative_cheese() # 叙事取巧检测
 │   ├── calculate_difficulty() # 难度计算
 │   ├── execute_check()       # 执行检定
 │   └── npc_take_action()     # NPC主动性
 └── WorldRules          # 世界规则
 ```
 
-### 数据流
-
-```
-玩家输入
-  ↓
-analyze_action() → ActionProfile
-  ↓
-check_narrative_cheese() → 是否编造资源？
-  ↓ 是 → 阻止
-  ↓ 否
-check_hard_limits() → 是否违反规则？
-  ↓ 是 → 阻止并建议替代方案
-  ↓ 否
-calculate_difficulty() → DC值
-  ↓
-execute_check() → d20掷骰
-  ↓
-process_resource_cost() → 资源消耗
-  ↓
-生成结果 → AI根据结果生成叙述
-```
-
 ## 版本历史
+
+### v3.2 (2026-03-30)
+- 新增复合行动分步检定系统
+- 支持6种复合行动模式识别
+- 步骤间相互影响机制
+- 策略效果验证
 
 ### v3.1 (2026-03-30)
 - 新增叙事取巧检测
