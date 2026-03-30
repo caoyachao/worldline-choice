@@ -1,69 +1,251 @@
 #!/usr/bin/env python3
 """
-Worldline Choice - AI驱动互动叙事游戏引擎
-完全开放式，不预设固定剧情，所有内容由AI实时生成
+Worldline Choice - AI驱动互动叙事游戏引擎 v3.0
+通用挑战框架版 - 严格检定系统，适应任何世界观
 """
 
 import json
 import os
 import sys
+import re
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
+from dataclasses import dataclass, field
+from enum import Enum
 import random
 
-# 游戏状态管理
+# ============ 通用能力维度定义 ============
+class AttributeDimension(Enum):
+    """6个通用能力维度 - 适配任何世界观"""
+    FORCE = "FORCE"           # 原始力量/战斗力
+    MIND = "MIND"             # 心智/智慧
+    INFLUENCE = "INFLUENCE"   # 影响力/魅力
+    REFLEX = "REFLEX"         # 反应/敏捷
+    RESILIENCE = "RESILIENCE" # 韧性/耐久
+    LUCK = "LUCK"             # 运气/机遇
+
+# 维度描述（用于AI理解）
+ATTRIBUTE_DESCRIPTIONS = {
+    AttributeDimension.FORCE: "物理力量、战斗能力、伤害输出",
+    AttributeDimension.MIND: "智力、策略、推理、知识",
+    AttributeDimension.INFLUENCE: "说服力、领导力、欺骗、社交",
+    AttributeDimension.REFLEX: "反应速度、敏捷、闪避、潜行",
+    AttributeDimension.RESILIENCE: "承受伤害、耐力、意志力、恢复",
+    AttributeDimension.LUCK: "随机事件、意外发现、机缘、巧合"
+}
+
+# ============ 难度等级定义 ============
+class DifficultyLevel(Enum):
+    SIMPLE = (5, "简单", 0.9)
+    NORMAL = (10, "普通", 0.7)
+    HARD = (15, "困难", 0.5)
+    VERY_HARD = (20, "极难", 0.3)
+    IMPOSSIBLE = (25, "不可能", 0.1)
+    
+    def __init__(self, dc, label, base_rate):
+        self.dc = dc
+        self.label = label
+        self.base_rate = base_rate
+
+# ============ 检定结果定义 ============
+@dataclass
+class CheckResult:
+    """检定结果"""
+    success: bool
+    roll: int
+    modifier: int
+    total: int
+    difficulty: int
+    margin: int
+    degree: str
+    attribute: str
+    narrative: str = ""
+    
+    def to_dict(self) -> Dict:
+        return {
+            "success": self.success,
+            "roll": self.roll,
+            "modifier": self.modifier,
+            "total": self.total,
+            "difficulty": self.difficulty,
+            "margin": self.margin,
+            "degree": self.degree,
+            "attribute": self.attribute
+        }
+
+# ============ 行动分析结果 ============
+@dataclass
+class ActionProfile:
+    """标准化的行动档案"""
+    raw_action: str
+    action_type: str
+    primary_attribute: AttributeDimension
+    secondary_attribute: Optional[AttributeDimension]
+    target: Optional[str]
+    environment_factor: int  # -5到+5
+    time_pressure: int       # 0到10
+    required_items: List[str] = field(default_factory=list)
+    required_tags: List[str] = field(default_factory=list)
+    required_secrets: List[str] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict:
+        return {
+            "action": self.raw_action,
+            "type": self.action_type,
+            "primary_attr": self.primary_attribute.value,
+            "secondary_attr": self.secondary_attribute.value if self.secondary_attribute else None,
+            "target": self.target,
+            "env_factor": self.environment_factor,
+            "time_pressure": self.time_pressure,
+            "requirements": {
+                "items": self.required_items,
+                "tags": self.required_tags,
+                "secrets": self.required_secrets
+            }
+        }
+
+# ============ 世界规则定义 ============
+@dataclass
+class WorldRules:
+    """世界观规则 - AI在游戏初始化时生成"""
+    world_setting: str
+    attributes: Dict[AttributeDimension, str]  # 维度->本世界名称
+    impossible_rules: List[str]                # 硬边界规则
+    difficulty_baseline: Dict[str, int]        # 难度基准值
+    action_templates: Dict[str, str]           # 行动类型模板
+    resource_names: Dict[str, str]             # 资源名称映射
+    
+    @classmethod
+    def generate_default(cls, world_setting: str) -> 'WorldRules':
+        """生成默认规则（当AI未提供时使用）"""
+        return cls(
+            world_setting=world_setting,
+            attributes={
+                AttributeDimension.FORCE: "武力",
+                AttributeDimension.MIND: "智力",
+                AttributeDimension.INFLUENCE: "魅力",
+                AttributeDimension.REFLEX: "敏捷",
+                AttributeDimension.RESILIENCE: "体质",
+                AttributeDimension.LUCK: "运气"
+            },
+            impossible_rules=[
+                "凡人无法飞行",
+                "新手无法击败大师",
+                "没有钥匙无法开锁"
+            ],
+            difficulty_baseline={
+                "简单": 5, "普通": 10, "困难": 15, "极难": 20, "不可能": 25
+            },
+            action_templates={
+                "战斗": "FORCE vs 对方FORCE或RESILIENCE",
+                "说服": "INFLUENCE vs 对方MIND",
+                "潜行": "REFLEX vs 对方MIND",
+                "解谜": "MIND",
+                "承受": "RESILIENCE"
+            },
+            resource_names={
+                "health": "生命值",
+                "stamina": "体力",
+                "money": "金钱",
+                "time": "时间",
+                "reputation": "声望"
+            }
+        )
+    
+    def to_dict(self) -> Dict:
+        return {
+            "world": self.world_setting,
+            "attributes": {k.value: v for k, v in self.attributes.items()},
+            "impossible_rules": self.impossible_rules,
+            "difficulty": self.difficulty_baseline,
+            "templates": self.action_templates
+        }
+
+# ============ 游戏状态管理 ============
 class GameState:
-    """管理游戏的所有状态数据 - 支持分层历史存储"""
+    """管理游戏的所有状态数据"""
+    
+    VERSION = "3.0"
     
     def __init__(self):
-        self.world_setting = ""  # 世界观设定
-        self.world_description = ""  # 世界观详细描述
-        self.current_scene = ""  # 当前场景描述
-        self.scene_context = ""  # 场景上下文
-        self.turn_count = 0  # 回合数
+        # 世界观
+        self.world_setting = ""
+        self.world_description = ""
+        self.world_rules: Optional[WorldRules] = None
+        
+        # 场景
+        self.current_scene = ""
+        self.scene_context = ""
+        self.turn_count = 0
         
         # 玩家状态
         self.player = {
             "name": "",
-            "role": "",  # 角色身份
-            "backstory": "",  # 背景故事
-            "attributes": {},  # 属性
-            "items": [],  # 持有物品
-            "tags": [],  # 性格/状态标签
-            "secrets": []  # 玩家知道的秘密
+            "role": "",
+            "backstory": "",
+            "attributes": {},  # 使用世界规则中的属性名
+            "items": [],
+            "tags": [],
+            "secrets": [],
+            "resources": {}    # 通用资源
         }
         
-        # NPC状态
-        self.npcs = {}  # {名字: {relationship, attitude, secrets, status}}
+        # NPC
+        self.npcs: Dict[str, Dict] = {}
         
         # 游戏标记
-        self.flags = {}  # 关键事件标记
+        self.flags: Dict[str, Any] = {}
         
-        # ===== 分层历史存储系统 =====
-        self.raw_history = []  # 原始完整记录（永不删除）
-        self.history_summaries = []  # 分层摘要记录
-        self.milestones = []  # 里程碑事件
+        # 历史系统
+        self.raw_history: List[Dict] = []
+        self.history_summaries: List[Dict] = []
+        self.milestones: List[Dict] = []
         
-        # 结局相关
+        # 结局
         self.ending_triggered = False
         self.ending_type = None
         
         # 代价追踪
-        self.costs_paid = []  # 已支付的代价列表
-        self.moral_corruption = 0  # 道德腐化值（0-100）
-        self.broken_trust = []  # 被破坏信任的关系列表
+        self.costs_paid: List[Dict] = []
+        self.moral_corruption = 0
+        self.broken_trust: List[str] = []
+        
+        # 自适应难度
+        self.difficulty_bias = 0
+        self.edge_cases: List[Dict] = []
         
         # 元数据
         self.start_time = datetime.now().isoformat()
         self.total_play_time_minutes = 0
+    
+    def initialize_resources(self):
+        """初始化通用资源"""
+        if self.world_rules:
+            resource_names = self.world_rules.resource_names
+        else:
+            resource_names = {
+                "health": "生命值",
+                "stamina": "体力",
+                "money": "金钱",
+                "time": "时间",
+                "reputation": "声望"
+            }
         
+        self.player["resources"] = {
+            "health": 100,
+            "stamina": 100,
+            "money": 50,
+            "time": 10,
+            "reputation": 0
+        }
+    
     def to_dict(self) -> Dict:
-        """序列化为字典 - 包含完整历史数据"""
         return {
-            "version": "2.0",
+            "version": self.VERSION,
             "save_time": datetime.now().isoformat(),
             "world_setting": self.world_setting,
             "world_description": self.world_description,
+            "world_rules": self.world_rules.to_dict() if self.world_rules else None,
             "current_scene": self.current_scene,
             "scene_context": self.scene_context,
             "turn_count": self.turn_count,
@@ -81,6 +263,8 @@ class GameState:
             "costs_paid": self.costs_paid,
             "moral_corruption": self.moral_corruption,
             "broken_trust": self.broken_trust,
+            "difficulty_bias": self.difficulty_bias,
+            "edge_cases": self.edge_cases,
             "metadata": {
                 "start_time": self.start_time,
                 "total_play_time_minutes": self.total_play_time_minutes
@@ -89,10 +273,29 @@ class GameState:
     
     @classmethod
     def from_dict(cls, data: Dict) -> 'GameState':
-        """从字典反序列化 - 恢复完整历史"""
         state = cls()
         state.world_setting = data.get("world_setting", "")
         state.world_description = data.get("world_description", "")
+        
+        # 恢复世界规则
+        rules_data = data.get("world_rules")
+        if rules_data:
+            attrs = {AttributeDimension(k): v for k, v in rules_data.get("attributes", {}).items()}
+            state.world_rules = WorldRules(
+                world_setting=rules_data.get("world", ""),
+                attributes=attrs,
+                impossible_rules=rules_data.get("impossible_rules", []),
+                difficulty_baseline=rules_data.get("difficulty", {}),
+                action_templates=rules_data.get("templates", {}),
+                resource_names={
+                    "health": "生命值",
+                    "stamina": "体力",
+                    "money": "金钱",
+                    "time": "时间",
+                    "reputation": "声望"
+                }
+            )
+        
         state.current_scene = data.get("current_scene", "")
         state.scene_context = data.get("scene_context", "")
         state.turn_count = data.get("turn_count", 0)
@@ -100,17 +303,18 @@ class GameState:
         state.npcs = data.get("npcs", {})
         state.flags = data.get("flags", {})
         
-        # 恢复分层历史
         history_data = data.get("history", {})
         state.raw_history = history_data.get("raw", [])
         state.history_summaries = history_data.get("summaries", [])
         state.milestones = history_data.get("milestones", [])
         
         state.ending_triggered = data.get("ending_triggered", False)
-        state.ending_type = data.get("ending_type", None)
+        state.ending_type = data.get("ending_type")
         state.costs_paid = data.get("costs_paid", [])
         state.moral_corruption = data.get("moral_corruption", 0)
         state.broken_trust = data.get("broken_trust", [])
+        state.difficulty_bias = data.get("difficulty_bias", 0)
+        state.edge_cases = data.get("edge_cases", [])
         
         metadata = data.get("metadata", {})
         state.start_time = metadata.get("start_time", datetime.now().isoformat())
@@ -122,24 +326,21 @@ class GameState:
         """更新NPC状态"""
         if name not in self.npcs:
             self.npcs[name] = {
-                "relationship": 0,  # -100到100
+                "relationship": 0,
                 "attitude": "中立",
                 "secrets": [],
-                "status": "正常"
+                "status": "正常",
+                "attributes": {}  # NPC也有属性
             }
         self.npcs[name].update(kwargs)
     
-    def add_history(self, action: str, result: str, consequences: Dict = None):
-        """
-        添加历史记录 - 使用分层存储策略
-        所有回合的完整数据永久保存到 raw_history
-        """
+    def add_history(self, action: str, result: str, consequences: Dict = None, 
+                    check_result: CheckResult = None):
+        """添加历史记录"""
         self.turn_count += 1
         
-        # 自动生成精简摘要
         summary = self._generate_turn_summary(action, result, consequences)
         
-        # 创建完整记录
         record = {
             "turn": self.turn_count,
             "action": action,
@@ -148,33 +349,25 @@ class GameState:
             "timestamp": datetime.now().isoformat(),
             "state_snapshot": {
                 "attributes": self.player.get("attributes", {}).copy(),
+                "resources": self.player.get("resources", {}).copy(),
                 "tags": self.player.get("tags", []).copy(),
                 "items_count": len(self.player.get("items", [])),
                 "npc_relations": {name: info.get("relationship", 0) 
                                  for name, info in self.npcs.items()}
             },
-            "consequences": consequences or {}
+            "consequences": consequences or {},
+            "check_result": check_result.to_dict() if check_result else None
         }
         
-        # 永久保存到原始历史（永不删除）
         self.raw_history.append(record)
-        
-        # 触发里程碑检查
         self._check_milestones()
-        
-        # 定期生成分层摘要
         self._update_summaries()
     
     def _generate_turn_summary(self, action: str, result: str, consequences: Dict) -> str:
-        """自动生成回合精简摘要"""
-        # 提取关键信息
-        summary_parts = []
-        
-        # 行动简述（取前20字）
+        """生成回合摘要"""
         action_short = action[:30] + "..." if len(action) > 30 else action
-        summary_parts.append(f"回合{self.turn_count}: {action_short}")
+        summary_parts = [f"回合{self.turn_count}: {action_short}"]
         
-        # 关键状态变化
         if consequences:
             attr_changes = consequences.get("attribute_changes", {})
             if attr_changes:
@@ -182,36 +375,32 @@ class GameState:
                 if changes:
                     summary_parts.append(f"属性: {', '.join(changes)}")
             
-            tags_added = consequences.get("tags_added", [])
-            if tags_added:
-                summary_parts.append(f"获得标签: {', '.join(tags_added)}")
+            resource_changes = consequences.get("resource_changes", {})
+            if resource_changes:
+                res_changes = [f"{k}{v:+d}" for k, v in resource_changes.items() if v != 0]
+                if res_changes:
+                    summary_parts.append(f"资源: {', '.join(res_changes)}")
         
         return " | ".join(summary_parts)
     
     def _check_milestones(self):
-        """检查并记录里程碑事件"""
-        # 基于回合数、关键flag、属性变化等判断里程碑
-        current_turn = self.turn_count
-        
-        # 检查是否有新的重要flag
-        important_flags = ["投曹", "投袁", "自立", "乌巢功臣", "官渡胜利", "背叛", "结盟"]
+        """检查里程碑"""
+        important_flags = ["投曹", "投袁", "自立", "背叛", "结盟", "死亡", "胜利"]
         for flag in important_flags:
             if flag in self.flags and flag not in [m.get("flag") for m in self.milestones]:
                 self.milestones.append({
-                    "turn": current_turn,
+                    "turn": self.turn_count,
                     "flag": flag,
-                    "description": f"达成关键事件: {flag}",
+                    "description": f"达成: {flag}",
                     "timestamp": datetime.now().isoformat()
                 })
     
     def _update_summaries(self):
         """更新分层摘要"""
-        # 每10回合生成一个中期摘要
         if self.turn_count % 10 == 0 and self.turn_count > 0:
             start_turn = self.turn_count - 9
             end_turn = self.turn_count
             
-            # 获取这10回合的记录
             turn_records = [r for r in self.raw_history 
                           if start_turn <= r["turn"] <= end_turn]
             
@@ -219,174 +408,788 @@ class GameState:
                 summary = self._create_period_summary(start_turn, end_turn, turn_records)
                 self.history_summaries.append(summary)
     
-    def _create_period_summary(self, start_turn: int, end_turn: int, records: List[Dict]) -> Dict:
+    def _create_period_summary(self, start_turn: int, end_turn: int, 
+                               records: List[Dict]) -> Dict:
         """创建阶段摘要"""
-        # 提取关键决策
         key_decisions = [r["action"][:50] for r in records[:3]]
         
-        # 汇总状态变化
         total_attr_changes = {}
-        all_tags = []
-        
         for record in records:
             cons = record.get("consequences", {})
             attr_changes = cons.get("attribute_changes", {})
             for attr, delta in attr_changes.items():
                 total_attr_changes[attr] = total_attr_changes.get(attr, 0) + delta
-            
-            tags_added = cons.get("tags_added", [])
-            all_tags.extend(tags_added)
         
         return {
             "turn_range": f"{start_turn}-{end_turn}",
-            "summary": f"第{start_turn}-{end_turn}回合: 完成了{len(records)}个行动",
+            "summary": f"第{start_turn}-{end_turn}回合",
             "key_decisions": key_decisions,
             "state_changes": total_attr_changes,
-            "tags_added": list(set(all_tags)),
             "generated_at": datetime.now().isoformat()
         }
     
     def _generate_recent_summary(self) -> str:
-        """生成最近回合的简要描述"""
+        """生成最近摘要"""
         if not self.raw_history:
             return "游戏刚开始"
-        
         recent = self.raw_history[-5:]
-        summaries = [r["summary"] for r in recent]
-        return "\n".join(summaries)
+        return "\n".join([r["summary"] for r in recent])
     
     def get_history_for_ai(self) -> str:
-        """
-        为AI组装历史上下文 - 分层策略
-        近期详细 + 中期摘要 + 长期里程碑
-        """
+        """为AI组装历史上下文"""
         parts = []
         
-        # 1. 近期详细（最近5回合）- 100% 保留
         if self.raw_history:
             recent = self.raw_history[-5:]
             recent_text = "\n".join([
-                f"回合{r['turn']}: {r['action']} -> {r['result'][:80]}..."
+                f"回合{r['turn']}: {r['action']}"
                 for r in recent
             ])
-            parts.append(f"【最近5回合详细】\n{recent_text}")
+            parts.append(f"【最近5回合】\n{recent_text}")
         
-        # 2. 中期摘要（如果有）
-        if self.history_summaries:
-            # 取最近的2个摘要
-            recent_summaries = self.history_summaries[-2:]
-            summary_text = "\n".join([
-                f"第{s['turn_range']}回合: {', '.join(s['key_decisions'][:2])}"
-                for s in recent_summaries
-            ])
-            parts.append(f"【前期摘要】\n{summary_text}")
-        
-        # 3. 长期里程碑
         if self.milestones:
             milestone_text = " -> ".join([m["flag"] for m in self.milestones[-5:]])
-            parts.append(f"【关键里程碑】\n{milestone_text}")
+            parts.append(f"【里程碑】\n{milestone_text}")
         
         return "\n\n".join(parts) if parts else "游戏刚开始"
     
-    def get_raw_history(self) -> List[Dict]:
-        """获取完整原始历史记录"""
-        return self.raw_history.copy()
+    def get_attribute_value(self, dimension: AttributeDimension) -> int:
+        """获取属性值（通过世界规则映射）"""
+        if not self.world_rules:
+            return 10
+        attr_name = self.world_rules.attributes.get(dimension, dimension.value)
+        return self.player["attributes"].get(attr_name, 10)
+
+
+# ============ 通用挑战引擎 ============
+class UniversalChallengeEngine:
+    """
+    通用挑战判定引擎
+    基于相对能力和客观规则，不依赖具体世界观
+    """
     
-    def get_milestones(self) -> List[Dict]:
-        """获取里程碑列表"""
-        return self.milestones.copy()
+    def __init__(self, game_state: GameState):
+        self.state = game_state
+        self.last_check_result: Optional[CheckResult] = None
+    
+    def analyze_action(self, action_text: str, context: Dict = None) -> ActionProfile:
+        """
+        解析玩家行动 - 标准化为系统可理解的格式
+        使用启发式规则进行初步分析
+        """
+        action_lower = action_text.lower()
+        context = context or {}
+        
+        # 识别行动类型（启发式）
+        action_type = self._identify_action_type(action_text)
+        
+        # 确定主属性
+        primary_attr = self._get_primary_attribute(action_type, action_text)
+        
+        # 确定副属性（如果有）
+        secondary_attr = self._get_secondary_attribute(action_type)
+        
+        # 识别目标
+        target = self._identify_target(action_text)
+        
+        # 环境因素
+        env_factor = context.get("environment", 0)
+        
+        # 时间压力
+        time_pressure = context.get("time_pressure", 0)
+        
+        # 识别可能的物品需求（启发式）
+        required_items = self._identify_required_items(action_text)
+        
+        return ActionProfile(
+            raw_action=action_text,
+            action_type=action_type,
+            primary_attribute=primary_attr,
+            secondary_attribute=secondary_attr,
+            target=target,
+            environment_factor=env_factor,
+            time_pressure=time_pressure,
+            required_items=required_items
+        )
+    
+    def _identify_action_type(self, action: str) -> str:
+        """识别行动类型"""
+        action_lower = action.lower()
+        
+        # 战斗相关
+        if any(w in action_lower for w in ["打", "杀", "战", "斗", "攻", "击", "战斗", "杀", "砍", "刺", "射"]):
+            return "战斗"
+        
+        # 说服相关
+        if any(w in action_lower for w in ["说服", "劝", "骗", "诈", "哄", "忽悠", "谈", "聊", "请求"]):
+            return "说服"
+        
+        # 潜行相关
+        if any(w in action_lower for w in ["潜", "躲", "藏", "偷", "溜", "爬", "绕", "避", "隐"]):
+            return "潜行"
+        
+        # 解谜相关
+        if any(w in action_lower for w in ["解", "想", "分析", "推理", "思考", "研究", "查", "找线索"]):
+            return "解谜"
+        
+        # 探索相关
+        if any(w in action_lower for w in ["走", "去", "到", "探索", "调查", "搜索", "看", "观察"]):
+            return "探索"
+        
+        # 制作相关
+        if any(w in action_lower for w in ["做", "造", "制", "炼", "合成", "打造", "准备"]):
+            return "制作"
+        
+        return "其他"
+    
+    def _get_primary_attribute(self, action_type: str, action_text: str) -> AttributeDimension:
+        """确定主属性"""
+        mapping = {
+            "战斗": AttributeDimension.FORCE,
+            "说服": AttributeDimension.INFLUENCE,
+            "潜行": AttributeDimension.REFLEX,
+            "解谜": AttributeDimension.MIND,
+            "探索": AttributeDimension.REFLEX,
+            "制作": AttributeDimension.MIND,
+        }
+        return mapping.get(action_type, AttributeDimension.MIND)
+    
+    def _get_secondary_attribute(self, action_type: str) -> Optional[AttributeDimension]:
+        """确定副属性"""
+        mapping = {
+            "战斗": AttributeDimension.RESILIENCE,
+            "说服": AttributeDimension.MIND,
+            "潜行": AttributeDimension.LUCK,
+            "解谜": AttributeDimension.LUCK,
+        }
+        return mapping.get(action_type)
+    
+    def _identify_target(self, action: str) -> Optional[str]:
+        """识别目标（简化版）"""
+        # 从action中提取可能的NPC或对象名
+        # 这里使用简单启发式，实际可由AI提取
+        return None
+    
+    def _identify_required_items(self, action: str) -> List[str]:
+        """识别可能需要的物品"""
+        items = []
+        action_lower = action.lower()
+        
+        # 开锁
+        if any(w in action_lower for w in ["开锁", "撬锁", "开门"]):
+            items.append("开锁工具")
+        
+        # 攀爬
+        if any(w in action_lower for w in ["爬", "攀"]):
+            items.append("绳索")
+        
+        # 远程攻击
+        if any(w in action_lower for w in ["射", "箭", "弓"]):
+            items.append("弓箭")
+        
+        # 照明
+        if any(w in action_lower for w in ["黑暗", "夜", "洞"]):
+            items.append("光源")
+        
+        return items
+    
+    def check_hard_limits(self, action_profile: ActionProfile) -> Dict:
+        """
+        检查是否违反硬边界
+        返回是否被阻止及原因
+        """
+        if not self.state.world_rules:
+            return {"blocked": False}
+        
+        rules = self.state.world_rules.impossible_rules
+        action_text = action_profile.raw_action.lower()
+        
+        # 检查每条不可能规则
+        for rule in rules:
+            rule_lower = rule.lower()
+            
+            # 提取规则关键词
+            if "无法" in rule_lower or "不能" in rule_lower:
+                # 解析规则
+                if self._action_violates_rule(action_profile, rule):
+                    return {
+                        "blocked": True,
+                        "rule": rule,
+                        "reason": f"违反世界规则: {rule}",
+                        "suggestion": self._suggest_alternative(action_profile, rule)
+                    }
+        
+        # 检查绝对不可能的情况
+        if action_profile.target:
+            npc = self.state.npcs.get(action_profile.target)
+            if npc:
+                npc_attrs = npc.get("attributes", {})
+                player_attrs = self.state.player.get("attributes", {})
+                
+                # 属性差距检查
+                for attr, npc_val in npc_attrs.items():
+                    player_val = player_attrs.get(attr, 10)
+                    if npc_val - player_val >= 30:
+                        return {
+                            "blocked": True,
+                            "rule": f"{attr}差距过大",
+                            "reason": f"你的{attr}({player_val})远低于{action_profile.target}({npc_val})，正面对抗不可能成功",
+                            "suggestion": "考虑寻找帮手、使用计谋、或寻找其他方法"
+                        }
+        
+        return {"blocked": False}
+    
+    def _action_violates_rule(self, profile: ActionProfile, rule: str) -> bool:
+        """检查行动是否违反规则"""
+        # 简化实现 - 检查关键词匹配
+        action = profile.raw_action.lower()
+        
+        # 示例："凡人无法飞行"
+        if "飞" in rule and "飞" in action:
+            if "凡人" in rule and "飞行" not in self.state.player.get("tags", []):
+                return True
+        
+        # 示例："没有钥匙无法开锁"
+        if "开锁" in action and "开锁" in rule:
+            if "开锁工具" not in self.state.player.get("items", []):
+                return True
+        
+        return False
+    
+    def _suggest_alternative(self, profile: ActionProfile, rule: str) -> str:
+        """提供替代建议"""
+        if "飞" in rule:
+            return "寻找楼梯、绳索，或其他移动方式"
+        if "开锁" in rule:
+            return "寻找钥匙、破门、或寻找其他入口"
+        if "击败" in rule or "差距" in rule:
+            return "寻找帮手、使用计谋、或寻找其他方法"
+        return "考虑其他方案"
+    
+    def calculate_difficulty(self, action_profile: ActionProfile) -> Dict:
+        """
+        计算难度 - 基于相对能力
+        """
+        # 基础难度
+        base_dc = 10
+        
+        modifiers = []
+        
+        # 1. 目标难度修正
+        if action_profile.target:
+            target_npc = self.state.npcs.get(action_profile.target)
+            if target_npc:
+                target_attr = target_npc.get("attributes", {})
+                player_attr = self.state.player.get("attributes", {})
+                
+                # 计算属性差距
+                gap = 0
+                for attr, val in target_attr.items():
+                    player_val = player_attr.get(attr, 10)
+                    gap += (val - player_val)
+                
+                if gap > 20:
+                    modifiers.append(("目标过强", gap // 5))
+                elif gap < -10:
+                    modifiers.append(("目标较弱", gap // 10))
+        
+        # 2. 环境因素
+        if action_profile.environment_factor != 0:
+            env_mod = -action_profile.environment_factor  # 有利环境降低难度
+            modifiers.append(("环境", env_mod))
+        
+        # 3. 时间压力
+        if action_profile.time_pressure > 5:
+            modifiers.append(("时间紧迫", action_profile.time_pressure // 2))
+        
+        # 4. 物品检查
+        missing_items = []
+        for item in action_profile.required_items:
+            if item not in self.state.player.get("items", []):
+                missing_items.append(item)
+                modifiers.append((f"缺少{item}", 5))
+        
+        # 5. 自适应难度修正
+        if self.state.difficulty_bias != 0:
+            modifiers.append(("难度调整", self.state.difficulty_bias))
+        
+        # 计算总难度
+        total_dc = base_dc + sum(m for _, m in modifiers)
+        
+        # 确定难度等级
+        level = self._dc_to_level(total_dc)
+        
+        # 估算成功率
+        player_attr = self.state.get_attribute_value(action_profile.primary_attribute)
+        estimated_rate = self._estimate_success_rate(total_dc, player_attr)
+        
+        return {
+            "base_dc": base_dc,
+            "total_dc": total_dc,
+            "modifiers": modifiers,
+            "level": level,
+            "missing_items": missing_items,
+            "estimated_rate": estimated_rate,
+            "risks": self._identify_risks(total_dc, action_profile)
+        }
+    
+    def _dc_to_level(self, dc: int) -> str:
+        """难度数值转等级"""
+        if dc <= 5: return "简单"
+        if dc <= 10: return "普通"
+        if dc <= 15: return "困难"
+        if dc <= 20: return "极难"
+        return "不可能"
+    
+    def _estimate_success_rate(self, dc: int, attr: int) -> float:
+        """估算成功率"""
+        # d20 + (attr-10)/2 >= dc
+        # 期望roll = 10.5
+        modifier = (attr - 10) // 2
+        needed_roll = dc - modifier
+        
+        if needed_roll <= 1:
+            return 1.0
+        if needed_roll >= 20:
+            return 0.05  # 只有掷出20可能成功
+        
+        success_count = 21 - needed_roll  # 包括needed_roll到20
+        return success_count / 20.0
+    
+    def _identify_risks(self, dc: int, profile: ActionProfile) -> List[str]:
+        """识别风险"""
+        risks = []
+        
+        if dc > 20:
+            risks.append("可能遭受严重失败")
+        elif dc > 15:
+            risks.append("失败可能导致受伤或损失")
+        
+        if profile.action_type == "战斗":
+            risks.append("可能受伤")
+        
+        if profile.time_pressure > 7:
+            risks.append("时间耗尽将导致机会丧失")
+        
+        return risks
+    
+    def execute_check(self, action_profile: ActionProfile, 
+                      difficulty_override: int = None) -> CheckResult:
+        """
+        执行检定 - 掷骰决定结果
+        """
+        # 获取难度
+        if difficulty_override:
+            dc = difficulty_override
+        else:
+            diff_calc = self.calculate_difficulty(action_profile)
+            dc = diff_calc["total_dc"]
+        
+        # 获取属性值
+        attr_value = self.state.get_attribute_value(action_profile.primary_attribute)
+        
+        # 掷骰 (d20)
+        roll = random.randint(1, 20)
+        
+        # 计算修正值 (D&D风格: 每2点属性±1)
+        modifier = (attr_value - 10) // 2
+        
+        # 总和
+        total = roll + modifier
+        
+        # 判定成功
+        success = total >= dc
+        
+        # 计算差值
+        margin = total - dc
+        
+        # 确定程度
+        degree = self._interpret_margin(margin, success, roll)
+        
+        # 创建结果
+        result = CheckResult(
+            success=success,
+            roll=roll,
+            modifier=modifier,
+            total=total,
+            difficulty=dc,
+            margin=margin,
+            degree=degree,
+            attribute=action_profile.primary_attribute.value
+        )
+        
+        self.last_check_result = result
+        return result
+    
+    def _interpret_margin(self, margin: int, success: bool, roll: int) -> str:
+        """解释差值"""
+        # 自然20大成功
+        if roll == 20:
+            return "大成功"
+        # 自然1大失败
+        if roll == 1:
+            return "大失败"
+        
+        if success:
+            if margin >= 10:
+                return "大成功"
+            if margin >= 5:
+                return "成功"
+            return "勉强成功"
+        else:
+            if margin <= -10:
+                return "大失败"
+            if margin <= -5:
+                return "失败"
+            return "勉强失败"
+    
+    def process_resource_cost(self, action_profile: ActionProfile, 
+                             check_result: CheckResult) -> Dict[str, int]:
+        """
+        计算资源消耗
+        """
+        costs = {}
+        
+        # 体力消耗
+        stamina_cost = 5
+        if action_profile.action_type == "战斗":
+            stamina_cost = 10
+            if not check_result.success:
+                stamina_cost += 5
+        elif action_profile.action_type == "潜行":
+            stamina_cost = 8
+        
+        costs["stamina"] = -stamina_cost
+        
+        # 失败时的额外损失
+        if not check_result.success:
+            if action_profile.action_type == "战斗":
+                damage = random.randint(5, 15)
+                if check_result.degree == "大失败":
+                    damage *= 2
+                costs["health"] = -damage
+        
+        # 应用消耗
+        for resource, change in costs.items():
+            current = self.state.player["resources"].get(resource, 0)
+            self.state.player["resources"][resource] = max(0, current + change)
+        
+        return costs
+    
+    def evaluate_action(self, action_text: str, context: Dict = None) -> Dict:
+        """
+        完整评估流程
+        """
+        # 1. 解析行动
+        profile = self.analyze_action(action_text, context)
+        
+        # 2. 检查硬边界
+        hard_limit = self.check_hard_limits(profile)
+        if hard_limit["blocked"]:
+            return {
+                "feasible": False,
+                "blocked": True,
+                "reason": hard_limit["reason"],
+                "rule": hard_limit.get("rule"),
+                "suggestion": hard_limit.get("suggestion"),
+                "action_profile": profile.to_dict()
+            }
+        
+        # 3. 计算难度
+        difficulty = self.calculate_difficulty(profile)
+        
+        # 4. 执行检定
+        check_result = self.execute_check(profile)
+        
+        # 5. 计算资源消耗
+        resource_costs = self.process_resource_cost(profile, check_result)
+        
+        # 6. 生成结果
+        return {
+            "feasible": True,
+            "action_profile": profile.to_dict(),
+            "difficulty": difficulty,
+            "check_result": check_result.to_dict(),
+            "resource_costs": resource_costs,
+            "success": check_result.success,
+            "degree": check_result.degree,
+            "narrative_template": self._get_narrative_template(check_result, profile)
+        }
+    
+    def _get_narrative_template(self, result: CheckResult, 
+                                profile: ActionProfile) -> str:
+        """获取叙述模板"""
+        templates = {
+            ("战斗", "大成功"): "你以压倒性优势击败对手，毫发无伤",
+            ("战斗", "成功"): "你成功击中对手，造成有效伤害",
+            ("战斗", "勉强成功"): "你勉强击中对手，但自己也受了点伤",
+            ("战斗", "失败"): "你的攻击被对手躲开，反而受了伤",
+            ("战斗", "大失败"): "你的攻击完全落空，遭受重创",
+            
+            ("说服", "大成功"): "对方完全被你说服，甚至对你产生好感",
+            ("说服", "成功"): "对方接受你的观点，态度软化",
+            ("说服", "勉强成功"): "对方半信半疑，但暂时接受",
+            ("说服", "失败"): "对方不为所动，甚至对你产生怀疑",
+            ("说服", "大失败"): "对方识破你的意图，关系恶化",
+            
+            ("潜行", "大成功"): "你完美隐匿，没有人发现你的存在",
+            ("潜行", "成功"): "你成功避开注意，没有引起怀疑",
+            ("潜行", "勉强成功"): "你勉强躲过注意，但心跳加速",
+            ("潜行", "失败"): "你发出声响，被人察觉",
+            ("潜行", "大失败"): "你完全暴露，陷入危险",
+        }
+        
+        key = (profile.action_type, result.degree)
+        return templates.get(key, f"行动{result.degree}")
+    
+    def npc_take_action(self) -> Optional[Dict]:
+        """
+        NPC主动性 - 敌对NPC可能采取行动
+        """
+        hostile_npcs = [
+            (name, info) for name, info in self.state.npcs.items()
+            if info.get("relationship", 0) < -30
+        ]
+        
+        if not hostile_npcs:
+            return None
+        
+        # 随机选择一个敌对NPC行动
+        npc_name, npc_info = random.choice(hostile_npcs)
+        
+        # 30%概率行动
+        if random.random() > 0.3:
+            return None
+        
+        # 生成NPC行动
+        action_types = ["攻击", "追击", "设伏", "警告"]
+        action = random.choice(action_types)
+        
+        return {
+            "npc": npc_name,
+            "action": action,
+            "relationship": npc_info.get("relationship", 0),
+            "description": f"{npc_name}对你采取了{action}行动"
+        }
+    
+    def learn_from_outcome(self, action_text: str, result: Dict, 
+                          player_feedback: str = None):
+        """
+        从结果学习，调整难度
+        """
+        check = result.get("check_result", {})
+        
+        # 记录边缘案例
+        if check.get("success") and result.get("difficulty", {}).get("total_dc", 0) > 20:
+            self.state.edge_cases.append({
+                "turn": self.state.turn_count,
+                "action": action_text,
+                "difficulty": result["difficulty"]["total_dc"],
+                "roll": check.get("roll"),
+                "note": "侥幸成功"
+            })
+        
+        # 根据反馈调整
+        if player_feedback:
+            if "简单" in player_feedback or "太简单" in player_feedback:
+                self.state.difficulty_bias += 1
+            elif "难" in player_feedback or "太难" in player_feedback:
+                self.state.difficulty_bias -= 1
 
 
+# ============ 游戏引擎主类 ============
 class WorldlineEngine:
     """
-    世界线抉择游戏引擎
-    完全开放式，AI生成所有内容
-    支持分层历史存储，永不丢失回合信息
+    世界线抉择游戏引擎 v3.0
+    通用挑战框架版
     """
     
     def __init__(self, model: str = "default"):
         self.state = GameState()
         self.model = model
+        self.challenge_engine: Optional[UniversalChallengeEngine] = None
         self.save_dir = os.path.expanduser("~/.claude/skills/worldline_choice/saves")
         os.makedirs(self.save_dir, exist_ok=True)
-        
+    
     def initialize_world(self, world_setting: str, player_role: str = "", 
                          player_name: str = "", world_desc: str = ""):
-        """
-        初始化游戏世界
-        不预设任何固定剧情，完全由AI生成世界观
-        """
+        """初始化游戏世界"""
         self.state.world_setting = world_setting
         self.state.world_description = world_desc
         self.state.player["name"] = player_name or "主角"
         self.state.player["role"] = player_role or "参与者"
         self.state.turn_count = 0
         
+        # 初始化世界规则（默认）
+        self.state.world_rules = WorldRules.generate_default(world_setting)
+        
         # 生成初始属性
-        self._generate_initial_attributes(player_role)
+        self._generate_initial_attributes()
         
-    def _generate_initial_attributes(self, role: str):
-        """根据角色生成初始属性"""
-        attribute_templates = {
-            "default": ["武力", "智力", "魅力", "声望"],
-            "侦探": ["观察", "推理", "人脉", "冷静"],
-            "战士": ["力量", "敏捷", "体质", "意志"],
-            "谋士": ["谋略", "学识", "口才", "洞察"],
-            "商人": ["财富", "谈判", "信息", "信誉"]
+        # 初始化资源
+        self.state.initialize_resources()
+        
+        # 初始化挑战引擎
+        self.challenge_engine = UniversalChallengeEngine(self.state)
+    
+    def _generate_initial_attributes(self):
+        """生成初始属性 - 使用通用维度"""
+        if not self.state.world_rules:
+            return
+        
+        # 为每个维度生成属性值（10-18）
+        for dim in AttributeDimension:
+            attr_name = self.state.world_rules.attributes[dim]
+            self.state.player["attributes"][attr_name] = random.randint(10, 18)
+    
+    def set_world_rules(self, rules: WorldRules):
+        """设置世界规则（可由AI生成）"""
+        self.state.world_rules = rules
+        # 重新映射属性名称
+        self._remap_attributes()
+    
+    def _remap_attributes(self):
+        """重新映射属性到新规则"""
+        if not self.state.world_rules:
+            return
+        
+        old_attrs = self.state.player["attributes"].copy()
+        new_attrs = {}
+        
+        for dim in AttributeDimension:
+            new_name = self.state.world_rules.attributes[dim]
+            # 尝试匹配旧属性
+            matched = False
+            for old_name, value in old_attrs.items():
+                if self._attributes_similar(old_name, new_name):
+                    new_attrs[new_name] = value
+                    matched = True
+                    break
+            if not matched:
+                new_attrs[new_name] = random.randint(10, 18)
+        
+        self.state.player["attributes"] = new_attrs
+    
+    def _attributes_similar(self, name1: str, name2: str) -> bool:
+        """判断两个属性名是否相似"""
+        # 简单的相似度检查
+        synonyms = {
+            "武力": ["力量", "武力", "战斗力", "攻击"],
+            "智力": ["智力", "智慧", "谋略", "学识", "知识"],
+            "魅力": ["魅力", "魅力", "说服", "话术", "社交"],
+            "敏捷": ["敏捷", "身法", "反应", "速度"],
+            "体质": ["体质", "耐力", "生命", "防御"],
+            "运气": ["运气", "幸运", "机缘", "气运"]
         }
         
-        role_type = "default"
-        role_lower = role.lower()
-        for key in attribute_templates:
-            if key in role_lower or any(word in role_lower for word in self._get_role_keywords(key)):
-                role_type = key
-                break
+        for group in synonyms.values():
+            if name1 in group and name2 in group:
+                return True
+        return False
+    
+    def process_player_action(self, action_text: str, context: Dict = None) -> Dict:
+        """
+        处理玩家行动 - 核心方法
+        """
+        if not self.challenge_engine:
+            return {"error": "游戏未初始化"}
         
-        attrs = attribute_templates.get(role_type, attribute_templates["default"])
-        self.state.player["attributes"] = {attr: random.randint(10, 20) for attr in attrs}
+        # 执行挑战评估
+        evaluation = self.challenge_engine.evaluate_action(action_text, context)
         
-    def _get_role_keywords(self, role_type: str) -> List[str]:
-        """获取角色类型的关键词"""
-        keywords = {
-            "侦探": ["侦探", "调查", "记者", "警察", "卧底", "探员"],
-            "战士": ["战士", "武士", "武将", "军人", "保镖", "猎人"],
-            "谋士": ["谋士", "军师", "策士", "学者", "法师", "智者"],
-            "商人": ["商人", "trader", "掌柜", "老板", "中介"]
+        # 如果被硬边界阻止
+        if evaluation.get("blocked"):
+            return {
+                "success": False,
+                "blocked": True,
+                "reason": evaluation["reason"],
+                "suggestion": evaluation.get("suggestion"),
+                "can_retry": True,
+                "turn": self.state.turn_count
+            }
+        
+        # 获取检定结果
+        check_result = evaluation.get("check_result", {})
+        success = check_result.get("success", False)
+        degree = check_result.get("degree", "失败")
+        
+        # 记录历史
+        narrative = evaluation.get("narrative_template", "")
+        consequences = {
+            "resource_changes": evaluation.get("resource_costs", {}),
+            "success": success,
+            "degree": degree
         }
-        return keywords.get(role_type, [])
+        
+        # 创建检定结果对象用于存储
+        check_obj = None
+        if check_result:
+            check_obj = CheckResult(
+                success=check_result.get("success", False),
+                roll=check_result.get("roll", 1),
+                modifier=check_result.get("modifier", 0),
+                total=check_result.get("total", 1),
+                difficulty=check_result.get("difficulty", 10),
+                margin=check_result.get("margin", -9),
+                degree=degree,
+                attribute=check_result.get("attribute", "MIND")
+            )
+        
+        self.state.add_history(action_text, narrative, consequences, check_obj)
+        
+        # 检查NPC主动性
+        npc_action = self.challenge_engine.npc_take_action()
+        
+        return {
+            "success": success,
+            "degree": degree,
+            "evaluation": evaluation,
+            "narrative": narrative,
+            "resources": self.state.player["resources"].copy(),
+            "npc_action": npc_action,
+            "turn": self.state.turn_count,
+            "can_retry": not success and degree != "大失败"
+        }
     
     def get_system_prompt(self) -> str:
-        """
-        生成系统Prompt，使用分层历史存储
-        """
-        # 使用分层历史为AI组装上下文
+        """生成系统Prompt"""
         history_text = self.state.get_history_for_ai()
         
         npcs_text = "\n".join([
-            f"- {name}: 关系{info.get('relationship', 0)}, 态度{info.get('attitude', '中立')}, 状态{info.get('status', '正常')}"
+            f"- {name}: 关系{info.get('relationship', 0)}"
             for name, info in self.state.npcs.items()
         ]) if self.state.npcs else "暂无重要NPC"
         
-        # 里程碑信息
-        milestones_text = " -> ".join([m["flag"] for m in self.state.milestones]) if self.state.milestones else "暂无"
+        resources_text = json.dumps(self.state.player.get("resources", {}), ensure_ascii=False)
+        
+        # 世界规则信息
+        rules_text = ""
+        if self.state.world_rules:
+            attrs_text = ", ".join([
+                f"{k.value}->{v}" for k, v in self.state.world_rules.attributes.items()
+            ])
+            impossible_text = "\n".join([
+                f"- {r}" for r in self.state.world_rules.impossible_rules
+            ])
+            rules_text = f"""
+【世界规则】
+属性映射: {attrs_text}
+不可能规则:
+{impossible_text}
+"""
         
         return f"""你是《世界线·抉择》的叙事AI。这是一个基于"{self.state.world_setting}"世界观的互动叙事游戏。
 
-【世界观背景】
-{self.state.world_description or '请根据世界设定自行构建合理的背景'}
+{rules_text}
 
 【当前游戏状态】
 - 回合数: {self.state.turn_count}
 - 玩家角色: {self.state.player['name']} ({self.state.player['role']})
 - 玩家属性: {json.dumps(self.state.player['attributes'], ensure_ascii=False)}
+- 玩家资源: {resources_text}
 - 持有物品: {', '.join(self.state.player['items']) or '无'}
 - 性格标签: {', '.join(self.state.player['tags']) or '暂无'}
-- 知道的秘密: {', '.join(self.state.player['secrets']) or '暂无'}
 - 道德腐化值: {self.state.moral_corruption}/100
-- 已付出的代价: {', '.join(self.state.costs_paid) if self.state.costs_paid else '无'}
-
-【关键里程碑】
-{milestones_text}
 
 【重要NPC】
 {npcs_text}
@@ -394,55 +1197,64 @@ class WorldlineEngine:
 【历史记录】
 {history_text}
 
-【你的任务】
-1. 根据当前状态和历史生成一个引人入胜的场景（100-200字），包含冲突或抉择点
-2. 分析场景中的核心矛盾
-3. 生成4个不同方向的预设选项，每个代表不同的剧情走向
-4. 等待玩家选择或自由输入
-5. 根据玩家行动推演后果，更新状态
+【核心机制：强制检定系统】
+本游戏使用严格的d20检定系统：
+1. 每个行动都有难度等级(DC)：简单(5)/普通(10)/困难(15)/极难(20)/不可能(25+)
+2. 检定公式：d20 + 属性修正 >= DC
+3. 修正值：(属性值-10)/2，向下取整
+4. 结果等级：大成功(超10+)/成功(超5+)/勉强成功/勉强失败/失败/大失败(差10+)
+5. 自然20必成功，自然1必失败
 
-【选项设计原则】
-- 不按性格分类，按剧情方向设计
-- 每个选项代表实质不同的分支（支持某方/选择方法/道德立场）
-- A/B/C选项必须有真实的权衡，没有"完美"选择，每个都有代价
-- D选项（特殊路线）设计规则：
-  * 只有在玩家拥有特定标签/物品/关系时才显示
-  * 不应该是"完美解决方案"，而是有代价的双刃剑
-  * 可能比常规选项更高效，但会牺牲某些东西（道德、关系、未来选项、永久属性）
-  * 可能带来隐藏风险或意想不到的负面后果
-  * 示例：用黑魔法快速解决问题但获得【腐化】标签；背叛盟友获得短期利益但永久损失信任；使用禁忌力量拯救现在但失去未来某种可能性
-  * D选项的hint应该暗示这种代价或风险
+【你必须遵守的铁律】
+❌ 绝对禁止：
+- 让检定失败的行动"意外成功"
+- 为玩家编造不存在的物品或能力
+- 让玩家轻松完成明显超出能力的事
+- 因为"剧情需要"而降低难度
 
-【严格可行性评估原则】
-评估玩家自由输入时，必须完全基于客观事实：
-1. 客观能力检查：玩家是否有执行此行动所需的技能/能力/物品？
-2. 情境限制检查：当前环境是否允许此行动？
-3. 信息掌握检查：不能假设玩家知道未发现的秘密
-4. 合理性评估：符合游戏世界的基本逻辑和物理法则
-5. 不刻意迎合：不能因为玩家想这么做就让其轻易成功
-6. 不刻意刁难：不能因为玩家想这么做就故意使其失败
+✅ 必须执行：
+- 严格按检定结果决定剧情走向
+- 失败必须有真实后果（受伤、损失、关系恶化）
+- 超出能力的尝试明确拒绝并提供替代方案
+- 资源耗尽时限制行动（体力归零无法战斗）
+
+【生成要求】
+1. 生成场景描述（100-150字）
+2. 识别核心冲突
+3. 提供4个选项（A/B/C/D）
+4. 对每个选项评估难度DC（让玩家知道有多难）
+5. 等待玩家选择
 
 【输出格式】
-返回JSON格式：
 {{
   "scene_title": "场景标题",
   "scene_description": "场景描述",
   "conflict": "核心冲突",
   "options": {{
-    "A": {{"direction": "方向描述", "text": "选项文本", "hint": "暗示性后果"}},
-    "B": {{"direction": "方向描述", "text": "选项文本", "hint": "暗示性后果"}},
-    "C": {{"direction": "方向描述", "text": "选项文本", "hint": "暗示性后果"}},
-    "D": {{"direction": "方向描述", "text": "选项文本", "hint": "暗示性后果", "condition": "触发条件(如有)"}}
-  }},
-  "present_npcs": ["当前在场的NPC"],
-  "atmosphere": "氛围关键词",
-  "secrets_hint": ["可能的隐藏线索"]
+    "A": {{"text": "选项文本", "dc": 10, "attribute": "FORCE", "hint": "需要高武力"}},
+    "B": {{"text": "选项文本", "dc": 15, "attribute": "MIND", "hint": "困难但可行"}},
+    "C": {{"text": "选项文本", "dc": 12, "attribute": "INFLUENCE", "hint": "中等难度"}},
+    "D": {{"text": "选项文本", "dc": 20, "attribute": "LUCK", "hint": "高风险高回报，失败后果严重"}}
+  }}
 }}
 """
     
-    def get_action_prompt(self, player_input: str) -> str:
+    def get_action_prompt(self, player_input: str, evaluation: Dict = None) -> str:
         """生成处理玩家行动的Prompt"""
-        return f"""玩家在当前场景中做出了选择/行动。
+        
+        check_info = ""
+        if evaluation and evaluation.get("check_result"):
+            cr = evaluation["check_result"]
+            check_info = f"""
+【强制检定结果】
+- 检定属性: {cr.get('attribute')}
+- 难度DC: {cr.get('difficulty')}
+- 掷骰: d20={cr.get('roll')} + 修正{cr.get('modifier')} = {cr.get('total')}
+- 结果: {cr.get('degree')} (差值: {cr.get('margin'):+d})
+- {'成功' if cr.get('success') else '失败'}
+"""
+        
+        return f"""玩家在当前场景中做出行动。
 
 【当前场景】
 {self.state.current_scene}
@@ -450,132 +1262,37 @@ class WorldlineEngine:
 【玩家行动】
 {player_input}
 
-【可行性评估原则 - 严格客观】
-评估可行性时必须完全基于客观事实，不刻意迎合也不刻意刁难：
-
-1. **客观能力检查**
-   - 玩家是否有执行此行动所需的技能/能力？
-   - 玩家属性是否达到行动要求？（如武力15以上才能单挑精英守卫）
-   - 玩家是否拥有必要物品？（如开锁需要工具，飞行需要坐骑）
-
-2. **情境限制检查**
-   - 当前环境是否允许此行动？（如在密闭空间无法召唤大型生物）
-   - 时间是否充裕？（如3分钟内无法完成需要1小时的仪式）
-   - 是否有物理限制？（如无绳索无法攀爬光滑岩壁）
-
-3. **信息掌握检查**
-   - 玩家是否知道执行此行动所需的信息？
-   - 不能假设玩家知道未发现的秘密或NPC的真实身份
-   - 尝试利用未知信息应失败或产生意外后果
-
-4. **合理性评估**
-   - 行动是否符合游戏世界的基本逻辑和物理法则？
-   - 新手不可能瞬间击败大师，凡人不能随意撼动神祇
-   - 社会关系不能瞬间逆转（敌视→信任需要时间）
-
-5. **难度分级**
-   - 简单：玩家能力明显足够，高成功率
-   - 困难：玩家能力勉强，需要检定或有失败风险
-   - 极难：玩家能力不足，几乎不可能成功
-   - 不可能：完全超出玩家能力范围，明确拒绝
-
-【重要原则】
-- 不刻意迎合：不能因为玩家想这么做就让其轻易成功
-- 不刻意刁难：不能因为玩家想这么做就故意使其失败
-- 客观公正：基于事实判断，让玩家为自己的选择承担真实后果
-- 失败也有趣：失败应该产生有意义的后果，而非简单的"你失败了"
-
-【处理方式】
-- 可行：正常执行，根据难度决定成功程度
-- 困难但可行：执行但伴随高风险或负面后果
-- 不可行：明确告知为什么不可行，并提供合理化的替代方案
-- 部分可行：行动部分成功，但效果打折或有意外代价
+{check_info}
 
 【处理要求】
-1. 解析玩家意图（行动类型：战斗/对话/观察/物品/移动/其他）
-2. 基于上述原则严格评估可行性
-3. 推演行动的直接后果和长期影响（成功或失败都有后果）
-4. 更新相关状态（属性变化、关系变化、获得物品、触发事件）
-5. 判断是否触发结局条件
+1. 基于检定结果生成剧情叙述（150-250字）
+2. 严格按照成功/失败/程度生成结果：
+   - 大成功：超额完成，有额外收益
+   - 成功：顺利完成
+   - 勉强成功：完成但有代价
+   - 勉强失败：失败但有机会补救
+   - 失败：明确失败，承担后果
+   - 大失败：灾难性后果
 
-【状态更新规则】
-- 成功行动可能提升相关属性或关系
-- 失败或鲁莽行动会带来真实的负面后果
-- 超出能力的尝试可能导致受伤、损失物品或关系恶化
-- 关键行动会添加剧情标记(flags)
-- 每次行动推进回合数
+3. 更新状态（属性、资源、关系、物品）
+4. 检查是否触发结局
+5. 如果失败，提供替代建议
 
 【输出格式】
-返回JSON格式：
 {{
-  "intention": "解析的玩家意图",
-  "action_type": "行动类型",
-  "feasible": true/false,
-  "narrative": "剧情描述（150-250字），描述发生了什么",
+  "narrative": "剧情描述",
   "consequences": {{
     "attribute_changes": {{}},
+    "resource_changes": {{}},
     "relationship_changes": {{}},
     "items_gained": [],
     "items_lost": [],
     "tags_added": [],
-    "secrets_learned": [],
-    "npc_changes": {{}}
+    "secrets_learned": []
   }},
   "flags_set": {{}},
-  "special_cost": null,  // 如果使用D选项，描述付出的代价
   "ending_triggered": false,
-  "ending_type": null,
-  "next_scene_hint": "下一场景的建议方向"
-}}
-"""
-    
-    def get_ending_prompt(self) -> str:
-        """生成结局的Prompt - 使用完整历史"""
-        # 结局生成时使用完整历史
-        full_history_summary = "\n".join([
-            f"回合{r['turn']}: {r['action']}"
-            for r in self.state.raw_history
-        ])
-        
-        return f"""游戏已达到结局条件，请生成结局剧情。
-
-【完整游戏回顾】
-- 世界观: {self.state.world_setting}
-- 玩家: {self.state.player['name']} ({self.state.player['role']})
-- 回合数: {self.state.turn_count}
-- 最终属性: {json.dumps(self.state.player['attributes'], ensure_ascii=False)}
-- 重要关系: {json.dumps({k: v.get('relationship', 0) for k, v in self.state.npcs.items()}, ensure_ascii=False)}
-- 关键里程碑: {[m['flag'] for m in self.state.milestones]}
-- 持有物品: {self.state.player['items']}
-- 性格标签: {self.state.player['tags']}
-- 已支付的代价: {self.state.costs_paid}
-- 道德腐化值: {self.state.moral_corruption}/100
-- 被破坏的信任: {self.state.broken_trust}
-
-【完整历史记录】
-{full_history_summary}
-
-【结局判定】
-根据玩家的整体行为和选择，判断最符合的结局类型：
-- 正义结局：坚持正义，完成使命
-- 悲剧结局：牺牲或失败
-- 灰色结局：达成目标但付出代价
-- 反转结局：出乎意料的转折
-- 隐藏结局：特殊条件触发的独特结局
-
-【输出格式】
-{{
-  "ending_type": "结局类型",
-  "ending_title": "结局标题",
-  "ending_text": "结局剧情（200-300字）",
-  "ending_summary": "一句话总结",
-  "player_evaluation": "对玩家表现的评价",
-  "unlocked_secrets": ["揭露的秘密"],
-  "statistics": {{
-    "total_turns": {self.state.turn_count},
-    "key_choices": {len(self.state.milestones)},
-    "npcs_encountered": {len(self.state.npcs)}
-  }}
+  "alternative_suggestions": ["如果失败，建议这样做"]
 }}
 """
     
@@ -586,223 +1303,50 @@ class WorldlineEngine:
         
         return {
             "initialized": True,
+            "version": GameState.VERSION,
             "world": world_setting,
             "player": self.state.player,
-            "message": "游戏初始化完成。请AI根据世界观生成开场场景。",
+            "world_rules": self.state.world_rules.to_dict() if self.state.world_rules else None,
             "system_prompt": self.get_system_prompt()
         }
     
-    def process_action(self, player_input: str, ai_response: Dict) -> Dict:
-        """
-        处理玩家行动并更新状态
-        使用分层历史存储，确保不丢失任何回合信息
-        """
-        # 解析AI返回的状态变化
-        consequences = ai_response.get("consequences", {})
-        
-        # 更新属性
-        attr_changes = consequences.get("attribute_changes", {})
-        for attr, delta in attr_changes.items():
-            if attr in self.state.player["attributes"]:
-                self.state.player["attributes"][attr] += delta
-        
-        # 更新关系
-        rel_changes = consequences.get("relationship_changes", {})
-        for npc_name, delta in rel_changes.items():
-            current_rel = self.state.npcs.get(npc_name, {}).get("relationship", 0)
-            self.state.update_npc(npc_name, relationship=current_rel + delta)
-        
-        # 更新物品
-        items_gained = consequences.get("items_gained", [])
-        items_lost = consequences.get("items_lost", [])
-        self.state.player["items"].extend(items_gained)
-        for item in items_lost:
-            if item in self.state.player["items"]:
-                self.state.player["items"].remove(item)
-        
-        # 更新标签
-        tags_added = consequences.get("tags_added", [])
-        self.state.player["tags"].extend(tags_added)
-        
-        # 更新秘密
-        secrets_learned = consequences.get("secrets_learned", [])
-        self.state.player["secrets"].extend(secrets_learned)
-        
-        # 更新NPC状态
-        npc_changes = consequences.get("npc_changes", {})
-        for npc_name, changes in npc_changes.items():
-            self.state.update_npc(npc_name, **changes)
-        
-        # 更新flags
-        flags_set = ai_response.get("flags_set", {})
-        self.state.flags.update(flags_set)
-        
-        # 处理D选项的代价
-        special_cost = ai_response.get("special_cost")
-        if special_cost:
-            self.state.costs_paid.append({
-                "turn": self.state.turn_count,
-                "cost": special_cost,
-                "action": player_input
-            })
-            if isinstance(special_cost, dict):
-                if "腐化" in special_cost or "道德" in special_cost:
-                    self.state.moral_corruption += special_cost.get("value", 10)
-                if "背叛" in special_cost or "信任" in special_cost:
-                    npc = special_cost.get("npc", "未知")
-                    self.state.broken_trust.append(npc)
-        
-        # 检查结局
-        if ai_response.get("ending_triggered"):
-            self.state.ending_triggered = True
-            self.state.ending_type = ai_response.get("ending_type")
-        
-        # 记录历史 - 使用分层存储
-        narrative = ai_response.get("narrative", "")
-        self.state.add_history(player_input, narrative, consequences)
-        
-        # 更新当前场景
-        if "next_scene_hint" in ai_response:
-            self.state.scene_context = ai_response["next_scene_hint"]
-        
-        return {
-            "turn": self.state.turn_count,
-            "narrative": narrative,
-            "consequences": consequences,
-            "state_changed": True,
-            "ending_triggered": self.state.ending_triggered,
-            "current_state": self.get_current_state()
-        }
-    
-    def get_current_state(self) -> Dict:
-        """获取当前游戏状态"""
-        return {
-            "turn": self.state.turn_count,
-            "player": self.state.player,
-            "npcs": self.state.npcs,
-            "flags": self.state.flags,
-            "items": self.state.player["items"],
-            "tags": self.state.player["tags"],
-            "costs_paid": self.state.costs_paid,
-            "moral_corruption": self.state.moral_corruption,
-            "broken_trust": self.state.broken_trust,
-            "milestones": self.state.milestones
-        }
-    
-    def check_feasibility(self, action: Dict) -> Dict:
-        """客观可行性检查辅助方法"""
-        result = {
-            "feasible": True,
-            "difficulty": "简单",
-            "requirements": [],
-            "missing": [],
-            "warnings": []
-        }
-        
-        # 检查属性要求
-        attr_requirements = action.get("required_attributes", {})
-        for attr, min_value in attr_requirements.items():
-            current = self.state.player["attributes"].get(attr, 0)
-            if current < min_value:
-                result["missing"].append(f"{attr}需要{min_value}，当前{current}")
-                result["feasible"] = False
-        
-        # 检查物品要求
-        required_items = action.get("required_items", [])
-        for item in required_items:
-            if item not in self.state.player["items"]:
-                result["missing"].append(f"需要物品：{item}")
-                result["feasible"] = False
-        
-        # 检查标签要求
-        required_tags = action.get("required_tags", [])
-        for tag in required_tags:
-            if tag not in self.state.player["tags"]:
-                result["missing"].append(f"需要标签：{tag}")
-                result["feasible"] = False
-        
-        # 检查关系要求
-        required_relationships = action.get("required_relationships", {})
-        for npc, min_rel in required_relationships.items():
-            current = self.state.npcs.get(npc, {}).get("relationship", 0)
-            if current < min_rel:
-                result["missing"].append(f"与{npc}的关系需要{min_rel}，当前{current}")
-                result["feasible"] = False
-        
-        # 检查知识要求
-        required_secrets = action.get("required_secrets", [])
-        for secret in required_secrets:
-            if secret not in self.state.player["secrets"]:
-                result["missing"].append(f"需要知道：{secret}")
-                result["warnings"].append("尝试使用未知信息")
-        
-        # 确定难度
-        if result["missing"]:
-            missing_count = len(result["missing"])
-            if missing_count >= 3:
-                result["difficulty"] = "不可能"
-            elif missing_count == 2:
-                result["difficulty"] = "极难"
-            elif missing_count == 1:
-                result["difficulty"] = "困难"
-        
-        return result
-    
     def save_game(self, save_id: str) -> str:
-        """保存游戏 - 包含完整分层历史"""
+        """保存游戏"""
         filepath = os.path.join(self.save_dir, f"{save_id}.json")
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(self.state.to_dict(), f, ensure_ascii=False, indent=2)
         return filepath
     
     def load_game(self, save_id: str) -> bool:
-        """加载游戏 - 恢复完整历史"""
+        """加载游戏"""
         filepath = os.path.join(self.save_dir, f"{save_id}.json")
         if not os.path.exists(filepath):
             return False
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
             self.state = GameState.from_dict(data)
+            self.challenge_engine = UniversalChallengeEngine(self.state)
         return True
     
-    def list_saves(self) -> List[Dict]:
-        """列出所有存档"""
-        saves = []
-        for filename in os.listdir(self.save_dir):
-            if filename.endswith('.json'):
-                filepath = os.path.join(self.save_dir, filename)
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        saves.append({
-                            "id": filename[:-5],
-                            "world": data.get("world_setting", "未知"),
-                            "turn": data.get("turn_count", 0),
-                            "player": data.get("player", {}).get("name", "未知"),
-                            "raw_history_count": len(data.get("history", {}).get("raw", [])),
-                            "milestones_count": len(data.get("history", {}).get("milestones", [])),
-                            "last_modified": os.path.getmtime(filepath)
-                        })
-                except Exception:
-                    continue
-        return sorted(saves, key=lambda x: x["last_modified"], reverse=True)
-    
-    def get_raw_history(self) -> List[Dict]:
-        """获取完整原始历史记录"""
-        return self.state.get_raw_history()
-    
-    def get_milestones(self) -> List[Dict]:
-        """获取里程碑列表"""
-        return self.state.get_milestones()
+    def get_current_state(self) -> Dict:
+        """获取当前状态"""
+        return {
+            "turn": self.state.turn_count,
+            "player": self.state.player,
+            "npcs": self.state.npcs,
+            "flags": self.state.flags,
+            "resources": self.state.player.get("resources", {}),
+            "milestones": self.state.milestones
+        }
 
 
-# 命令行接口
+# ============ 命令行接口 ============
 class GameCLI:
     """命令行界面"""
     
     def __init__(self):
         self.engine = WorldlineEngine()
-        
+    
     def run(self, args: List[str]):
         """运行命令"""
         if len(args) < 1:
@@ -811,37 +1355,31 @@ class GameCLI:
         
         command = args[0]
         
-        if command == "--new" or command == "-n":
+        if command in ("--new", "-n"):
             self.cmd_new(args[1:])
-        elif command == "--load" or command == "-l":
+        elif command in ("--load", "-l"):
             self.cmd_load(args[1:])
-        elif command == "--list" or command == "-ls":
+        elif command in ("--list", "-ls"):
             self.cmd_list()
-        elif command == "--delete" or command == "-d":
-            self.cmd_delete(args[1:])
-        elif command == "--history" or command == "-hist":
-            self.cmd_history(args[1:])
-        elif command == "--help" or command == "-h":
-            self.show_help()
+        elif command in ("--test", "-t"):
+            self.cmd_test()
         else:
             self.cmd_new(args)
     
     def cmd_new(self, args: List[str]):
         """开始新游戏"""
-        world = args[0] if len(args) > 0 else input("请输入世界观设定: ")
-        role = args[1] if len(args) > 1 else input("请输入你的角色身份: ")
-        name = args[2] if len(args) > 2 else input("请输入角色名字: ")
+        world = args[0] if len(args) > 0 else input("世界观: ")
+        role = args[1] if len(args) > 1 else input("角色: ")
+        name = args[2] if len(args) > 2 else input("名字: ")
         
         result = self.engine.start_game(world, role, name)
         print(f"\n{'='*50}")
         print(f"游戏开始: {world}")
         print(f"{'='*50}")
-        print(f"\n角色: {name} ({role})")
+        print(f"角色: {name} ({role})")
         print(f"属性: {json.dumps(result['player']['attributes'], ensure_ascii=False)}")
-        print(f"\n请AI根据以上设定生成开场场景...")
-        print(f"\n系统Prompt已生成，请使用AI生成场景。")
-        print(f"\n使用: get_system_prompt() 获取完整Prompt")
-        
+        print(f"\n使用: get_system_prompt() 获取AI Prompt")
+    
     def cmd_load(self, args: List[str]):
         """加载游戏"""
         if len(args) < 1:
@@ -849,11 +1387,8 @@ class GameCLI:
             return
         save_id = args[0]
         if self.engine.load_game(save_id):
-            print(f"✅ 已加载存档: {save_id}")
-            print(f"当前回合: {self.engine.state.turn_count}")
-            print(f"世界观: {self.engine.state.world_setting}")
-            print(f"历史记录: {len(self.engine.state.raw_history)} 回合")
-            print(f"里程碑: {len(self.engine.state.milestones)} 个")
+            print(f"✅ 已加载: {save_id}")
+            print(f"回合: {self.engine.state.turn_count}")
         else:
             print(f"❌ 存档不存在: {save_id}")
     
@@ -863,86 +1398,110 @@ class GameCLI:
         if not saves:
             print("暂无存档")
             return
-        print(f"\n{'存档ID':<20} {'世界观':<20} {'回合':<8} {'历史记录':<10} {'里程碑':<8}")
-        print("-" * 80)
         for save in saves:
-            print(f"{save['id']:<20} {save['world']:<20} {save['turn']:<8} "
-                  f"{save['raw_history_count']:<10} {save['milestones_count']:<8}")
+            print(f"{save['id']}: {save['world']} - {save['turn']}回合")
     
-    def cmd_delete(self, args: List[str]):
-        """删除存档"""
-        if len(args) < 1:
-            print("错误: 请指定存档ID")
-            return
-        save_id = args[0]
-        filepath = os.path.join(self.engine.save_dir, f"{save_id}.json")
-        if os.path.exists(filepath):
-            os.remove(filepath)
-            print(f"已删除存档: {save_id}")
-        else:
-            print(f"存档不存在: {save_id}")
+    def cmd_test(self):
+        """运行测试"""
+        print("运行通用挑战框架测试...")
+        test_challenge_framework()
     
-    def cmd_history(self, args: List[str]):
-        """显示游戏历史"""
-        if not self.engine.state.raw_history:
-            print("暂无历史记录")
-            return
-        
-        print(f"\n{'='*60}")
-        print(f"游戏历史 - 共 {len(self.engine.state.raw_history)} 回合")
-        print(f"{'='*60}")
-        
-        # 显示里程碑
-        if self.engine.state.milestones:
-            print(f"\n【里程碑】")
-            for m in self.engine.state.milestones:
-                print(f"  回合{m['turn']}: {m['flag']}")
-        
-        # 显示最近10回合
-        print(f"\n【最近10回合】")
-        for record in self.engine.state.raw_history[-10:]:
-            print(f"\n回合{record['turn']}: {record['action']}")
-            print(f"  {record['summary']}")
-        
-        print(f"\n{'='*60}")
-        print("提示: 完整历史已保存，永不丢失")
-        
     def show_help(self):
         """显示帮助"""
         print("""
-Worldline Choice - AI驱动互动叙事游戏引擎
-支持分层历史存储，永不丢失回合信息
+Worldline Choice v3.0 - 通用挑战框架
 
 用法:
-  worldline_choice [命令] [参数]
-
-命令:
-  --new, -n [世界观] [角色] [名字]  开始新游戏
-  --load, -l <存档ID>              加载存档
-  --list, -ls                      列出所有存档
-  --delete, -d <存档ID>            删除存档
-  --history, -hist                 显示当前游戏历史
-  --help, -h                       显示帮助
-
-存档系统:
-  • 原始历史: 永久保存所有回合的完整信息
-  • 分层摘要: 自动生成阶段性摘要
-  • 里程碑: 自动记录关键剧情节点
-
-示例:
-  worldline_choice --new "三国" "谋士" "诸葛亮"
-  worldline_choice --load save_001
-  worldline_choice --history
-
-Python API:
-  from worldline_engine import WorldlineEngine
-  engine = WorldlineEngine()
-  engine.start_game("1960年代香港", "卧底警察", "阿超")
-  
-  # 获取分层历史
-  raw_history = engine.get_raw_history()
-  milestones = engine.get_milestones()
+  worldline_choice --new [世界观] [角色] [名字]
+  worldline_choice --load <存档ID>
+  worldline_choice --list
+  worldline_choice --test
         """)
+
+
+# ============ 测试函数 ============
+def test_challenge_framework():
+    """测试通用挑战框架"""
+    print("="*60)
+    print("通用挑战框架测试")
+    print("="*60)
+    
+    # 创建引擎
+    engine = WorldlineEngine()
+    engine.initialize_world("武侠江湖", "剑客", "李逍遥")
+    
+    print(f"\n1. 世界观: {engine.state.world_setting}")
+    print(f"2. 角色: {engine.state.player['name']} ({engine.state.player['role']})")
+    print(f"3. 属性: {json.dumps(engine.state.player['attributes'], ensure_ascii=False)}")
+    print(f"4. 资源: {json.dumps(engine.state.player['resources'], ensure_ascii=False)}")
+    
+    # 测试行动解析
+    print("\n5. 行动解析测试:")
+    test_actions = [
+        "我要和山贼战斗",
+        "尝试说服村长",
+        "偷偷潜入城堡",
+        "解开这个机关"
+    ]
+    
+    for action in test_actions:
+        profile = engine.challenge_engine.analyze_action(action)
+        print(f"   '{action}' -> {profile.action_type} ({profile.primary_attribute.value})")
+    
+    # 测试难度计算
+    print("\n6. 难度计算测试:")
+    engine.state.npcs["山贼头目"] = {
+        "relationship": -50,
+        "attributes": {"武力": 20, "体质": 18}
+    }
+    
+    profile = engine.challenge_engine.analyze_action("和山贼头目战斗")
+    profile.target = "山贼头目"
+    
+    difficulty = engine.challenge_engine.calculate_difficulty(profile)
+    print(f"   行动: {profile.raw_action}")
+    print(f"   基础DC: {difficulty['base_dc']}")
+    print(f"   总DC: {difficulty['total_dc']}")
+    print(f"   难度: {difficulty['level']}")
+    print(f"   估算成功率: {difficulty['estimated_rate']*100:.1f}%")
+    
+    # 测试检定执行
+    print("\n7. 检定执行测试 (10次):")
+    for i in range(10):
+        result = engine.challenge_engine.execute_check(profile)
+        status = "✓" if result.success else "✗"
+        print(f"   第{i+1}次: d20={result.roll:2d} + {result.modifier:+d} = {result.total:2d} vs DC={result.difficulty} -> {status} {result.degree}")
+    
+    # 测试完整评估
+    print("\n8. 完整评估测试:")
+    evaluation = engine.challenge_engine.evaluate_action("和山贼头目战斗")
+    print(f"   可行性: {evaluation['feasible']}")
+    print(f"   结果: {evaluation['degree']}")
+    print(f"   资源消耗: {evaluation['resource_costs']}")
+    
+    # 测试硬边界
+    print("\n9. 硬边界测试:")
+    engine.state.world_rules.impossible_rules.append("没有轻功无法飞檐走壁")
+    
+    eval_impossible = engine.challenge_engine.evaluate_action("飞上屋顶")
+    if eval_impossible.get("blocked"):
+        print(f"   ✓ 正确阻止: {eval_impossible['reason']}")
+    else:
+        print(f"   ✗ 未能阻止不可能的行动")
+    
+    # 测试NPC主动性
+    print("\n10. NPC主动性测试:")
+    engine.state.npcs["仇人"] = {"relationship": -60}
+    for i in range(5):
+        npc_action = engine.challenge_engine.npc_take_action()
+        if npc_action:
+            print(f"   NPC行动: {npc_action['description']}")
+        else:
+            print(f"   NPC未行动")
+    
+    print("\n" + "="*60)
+    print("测试完成!")
+    print("="*60)
 
 
 def main():
