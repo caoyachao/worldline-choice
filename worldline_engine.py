@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Worldline Choice - AI驱动互动叙事游戏引擎 v3.2
+Worldline Choice - AI驱动互动叙事游戏引擎 v3.3
 通用挑战框架版 - 严格检定系统，适应任何世界观
 新增：叙事取巧检测（编造资源、跳过检定）
 新增：复合行动分步检定系统
+新增：战术多步骤判定系统（完整版，无步骤限制）
 """
 
 import json
@@ -596,6 +597,586 @@ class UniversalChallengeEngine:
         return items
     
     # ========== 复合行动（分步检定）支持 ==========
+    
+    # ========== 多步骤战术解析系统（完整版 v3.3）==========
+    
+    # 步骤依赖关系定义
+    STEP_DEPENDENCIES = {
+        "偷袭": {"boosts": ["埋伏", "合围", "总攻"], "requires": []},
+        "埋伏": {"boosts": ["合围", "总攻", "伏击"], "requires": []},
+        "诈败": {"boosts": ["合围", "伏击", "包围"], "requires": ["埋伏"]},
+        "诱敌": {"boosts": ["合围", "伏击", "包围"], "requires": ["埋伏"]},
+        "佯攻": {"boosts": ["主攻", "奇袭"], "requires": []},
+        "粮草": {"boosts": ["总攻"], "requires": []},
+        "侦察": {"boosts": ["偷袭", "埋伏", "奇袭"], "requires": []},
+        "准备": {"boosts": ["攻击", "总攻", "奇袭"], "requires": []},
+    }
+    
+    def is_tactical_multi_step(self, action_text: str) -> bool:
+        """
+        检测是否为战术多步骤行动
+        识别列表式步骤描述（派X做Y，派Z做W...）
+        """
+        action_clean = action_text.lower().replace(' ', '').replace('，', ',')
+        
+        # 检测是否有多个"派..."或"安排..."结构
+        dispatch_count = len(re.findall(r'(?:派|安排|命令|令)', action_clean))
+        if dispatch_count >= 2:
+            return True
+        
+        # 检测数字+人/兵力分配
+        troop_patterns = len(re.findall(r'\d+(?:人|个|名|兵|卒|骑)', action_clean))
+        if troop_patterns >= 2:
+            return True
+        
+        # 检测明确的多步骤标记
+        step_markers = ['第一步', '第二步', '第三步', '首先', '其次', '然后', '接着', '最后',
+                       '先', '再', '又', '继而', '末了', '最终', '同时', '一边']
+        marker_count = sum(1 for marker in step_markers if marker in action_clean)
+        if marker_count >= 2:
+            return True
+        
+        # 检测兵力分配词
+        allocation_markers = ['剩下', '剩余', '其余', '另外', '主力', '亲卫', '精锐']
+        allocation_count = sum(1 for marker in allocation_markers if marker in action_clean)
+        if allocation_count >= 2:
+            return True
+        
+        # 检测亲率/亲自
+        if '亲率' in action_clean or '亲自' in action_clean or '本将' in action_clean:
+            # 如果有亲率，并且有其他行动标记
+            if any(m in action_clean for m in ['命令', '令', '派', '又']):
+                return True
+        
+        return False
+    
+    def parse_tactical_steps(self, action_text: str) -> List[Dict]:
+        """
+        解析战术多步骤行动 - v3.3增强版
+        支持任意数量的步骤，多种句式混合
+        """
+        # 清理文本
+        action_clean = action_text.lower().replace(' ', '').replace('，', ',').replace('。', ',').replace('\n', ',')
+        
+        steps = []
+        
+        # 方法1: 综合模式解析（支持多种句式混合）
+        steps = self._parse_comprehensive(action_clean)
+        
+        # 方法2: 如果综合解析步骤太少，尝试按步骤标记解析
+        if len(steps) < 2:
+            marker_steps = self._parse_by_step_markers(action_clean)
+            if len(marker_steps) > len(steps):
+                steps = marker_steps
+        
+        # 方法3: 如果还是没有，尝试按连接词分割
+        if not steps:
+            steps = self._parse_by_connectors(action_clean)
+        
+        # 建立步骤间依赖关系
+        self._establish_step_dependencies(steps)
+        
+        return steps
+    
+    def _parse_comprehensive(self, action_text: str) -> List[Dict]:
+        """
+        综合解析方法 - 支持多种句式混合
+        """
+        steps = []
+        step_index = 0
+        
+        # 定义所有可能的步骤模式（按优先级排序）
+        patterns = [
+            # 模式1: 派/安排/命令 X人做Y
+            (r'(?:派|安排|命令|让|使)(\d+)?(?:人|个|名|支|队|兵|卒|骑|将士)?([^，,；;]+?)(?=，|,|；|;|$)', '派兵'),
+            # 模式2: 剩下/剩余/其余 X人做Y
+            (r'(?:剩下|剩余|其余|另外|再|又|另)(\d+)?(?:人|个|名|支|队|兵|卒|骑|将士)?([^，,；;]+?)(?=，|,|；|;|$)', '剩余'),
+            # 模式3: 主力/亲卫/精锐做Y
+            (r'(?:主力|亲卫|精锐|中军|前锋|后卫|左翼|右翼)([^，,；;]+?)(?=，|,|；|;|$)', '主力'),
+            # 模式4: 我/吾/某亲率做Y
+            (r'(?:我|吾|某|本将|本帅|本将军|亲自)([^，,；;]+?)(?=，|,|；|;|$)', '亲率'),
+            # 模式5: 然后/接着/随后/再/又做Y
+            (r'(?:然后|接着|随后|再|又|之后|继而)([^，,；;]+?)(?=，|,|；|;|$)', '后续'),
+            # 模式6: 最后/最终/末了做Y
+            (r'(?:最后|最终|末了|终|结局)([^，,；;]+?)(?=，|,|；|;|$)', '最终'),
+            # 模式7: 第一步/首先做Y
+            (r'(?:第一步|首先|起初|先)([^，,；;]+?)(?=，|,|；|;|$)', '首先'),
+            # 模式8: 同时/一边...一边
+            (r'(?:同时|与此同时|一边)([^，,；;]+?)(?=，|,|；|;|$)', '同时'),
+        ]
+        
+        # 记录已匹配的文本位置，避免重复
+        matched_positions = set()
+        
+        for pattern, pattern_type in patterns:
+            for match in re.finditer(pattern, action_text):
+                # 检查是否与已匹配区域重叠
+                start, end = match.span()
+                if any(start < pos < end or pos < start < end_pos for pos, end_pos in matched_positions):
+                    continue
+                
+                # 提取信息
+                groups = match.groups()
+                if len(groups) >= 2 and groups[0]:  # 有兵力数字
+                    troop_info = groups[0]
+                    action_desc = groups[1].strip()
+                elif len(groups) >= 1:  # 无兵力数字
+                    troop_info = None
+                    action_desc = groups[-1].strip()
+                else:
+                    continue
+                
+                if not action_desc or len(action_desc) < 3:
+                    continue
+                
+                # 创建步骤
+                step_info = self._analyze_tactical_step(action_desc, step_index, troop_info)
+                step_info["pattern_type"] = pattern_type  # 记录匹配模式类型
+                steps.append(step_info)
+                step_index += 1
+                
+                # 记录匹配位置
+                matched_positions.add((start, end))
+        
+        # 按原始文本中的顺序排序
+        steps.sort(key=lambda x: x["index"])
+        
+        # 重新分配索引
+        for i, step in enumerate(steps):
+            step["index"] = i
+        
+        return steps
+    
+    def _analyze_tactical_step(self, step_text: str, step_index: int, 
+                               troop_info: str = None) -> Dict:
+        """
+        分析战术步骤，提取更丰富的信息
+        """
+        profile = self.analyze_action(step_text)
+        purpose = self._determine_tactical_purpose(step_text)
+        
+        # 提取目标
+        target = self._extract_tactical_target(step_text)
+        
+        # 判断是否为关键步骤（失败会导致整体失败）
+        is_critical = self._is_critical_step(purpose, step_text)
+        
+        # 计算基础DC（根据兵力、难度调整）
+        base_dc = self._calculate_tactical_dc(profile, purpose, troop_info)
+        
+        return {
+            "index": step_index,
+            "text": step_text,
+            "troop_info": troop_info,
+            "action_type": profile.action_type,
+            "primary_attribute": profile.primary_attribute,
+            "secondary_attribute": profile.secondary_attribute,
+            "purpose": purpose,
+            "target": target,
+            "is_critical": is_critical,
+            "base_dc": base_dc,
+            "dependencies": [],  # 依赖的前置步骤索引
+            "boosts": [],        # 受益的后续步骤
+            "result": None       # 执行结果（后填充）
+        }
+    
+    def _determine_tactical_purpose(self, step_text: str) -> str:
+        """
+        确定战术步骤的目的（更细致的分类）
+        """
+        step_lower = step_text.lower()
+        
+        # 偷袭/奇袭
+        if any(w in step_lower for w in ["偷袭", "奇袭", "夜袭", "劫营", "绕后", "迂回"]):
+            return "偷袭"
+        
+        # 埋伏/伏击
+        if any(w in step_lower for w in ["埋伏", "伏击", "设伏", "暗藏", "潜伏"]):
+            return "埋伏"
+        
+        # 诱敌/诈败
+        if any(w in step_lower for w in ["诱敌", "诈败", "佯败", "假逃", "引诱", "钓"]):
+            return "诱敌"
+        
+        # 佯攻/牵制
+        if any(w in step_lower for w in ["佯攻", "牵制", "吸引", "分散", "迷惑", "骚扰", "佯动"]):
+            return "佯攻"
+        
+        # 粮草/后勤
+        if any(w in step_lower for w in ["粮草", "粮道", "后勤", "补给", "焚粮", "劫粮", "烧粮"]):
+            return "粮草"
+        
+        # 侦察/情报
+        if any(w in step_lower for w in ["侦察", "探查", "打探", "侦查", "刺探", "探马", "哨探"]):
+            return "侦察"
+        
+        # 合围/包围
+        if any(w in step_lower for w in ["合围", "包围", "围困", "围剿", "围歼", "包饺子"]):
+            return "合围"
+        
+        # 总攻/决战
+        if any(w in step_lower for w in ["总攻", "决战", "猛攻", "强攻", "总攻击", "全力", "全歼"]):
+            return "总攻"
+        
+        # 撤退/逃跑
+        if any(w in step_lower for w in ["撤退", "撤离", "后退", "收兵", "鸣金"]):
+            return "撤退"
+        
+        # 防守/固守
+        if any(w in step_lower for w in ["防守", "固守", "坚守", "防御", "守阵", "稳守"]):
+            return "防守"
+        
+        # 进攻/攻击（通用）
+        if any(w in step_lower for w in ["进攻", "攻击", "攻打", "冲锋", "冲击", "交战", "出击"]):
+            return "进攻"
+        
+        # 准备/部署
+        if any(w in step_lower for w in ["准备", "部署", "安排", "布置", "整备", "待命"]):
+            return "准备"
+        
+        return "其他"
+    
+    def _extract_tactical_target(self, step_text: str) -> Optional[str]:
+        """
+        提取战术目标
+        """
+        step_lower = step_text.lower()
+        
+        # 常见目标
+        targets = [
+            "粮草", "粮道", "敌军", "敌营", "敌阵", "主帅", "中军", "侧翼", "后方",
+            "左翼", "右翼", "前锋", "后卫", "大营", "营寨", "城池", "关隘"
+        ]
+        
+        for target in targets:
+            if target in step_lower:
+                return target
+        
+        return None
+    
+    def _is_critical_step(self, purpose: str, step_text: str) -> bool:
+        """
+        判断是否为关键步骤
+        关键步骤失败会导致后续步骤无法执行或难度大增
+        """
+        critical_purposes = ["诱敌", "偷袭", "总攻", "合围"]
+        return purpose in critical_purposes
+    
+    def _calculate_tactical_dc(self, profile: ActionProfile, purpose: str, 
+                               troop_info: str) -> int:
+        """
+        计算战术步骤的DC
+        考虑战术类型、兵力、属性等
+        """
+        base_dc = 10
+        
+        # 战术类型修正
+        purpose_modifiers = {
+            "侦察": -3,      # 侦察相对容易
+            "准备": -2,      # 准备动作简单
+            "佯攻": 0,       # 标准难度
+            "偷袭": 2,       # 需要隐蔽
+            "埋伏": 0,       # 标准难度
+            "诱敌": 4,       # 需要演技和时机
+            "粮草": 2,       # 需要突破防线
+            "进攻": 0,       # 标准难度
+            "防守": -1,      # 防守有优势
+            "合围": 3,       # 需要协调
+            "总攻": 5,       # 决战难度高
+            "撤退": 2,       # 撤退也有风险
+        }
+        
+        modifier = purpose_modifiers.get(purpose, 0)
+        
+        # 兵力影响（如果有具体数字）
+        if troop_info and troop_info.isdigit():
+            troop_num = int(troop_info)
+            if troop_num < 50:
+                modifier += 2  # 兵力太少，难度大
+            elif troop_num > 500:
+                modifier -= 1  # 兵力充足，略有优势
+        
+        return max(5, base_dc + modifier)
+    
+    def _parse_by_connectors(self, action_text: str) -> List[Dict]:
+        """
+        按连接词解析步骤
+        """
+        # 连接词列表
+        connectors = ['，', ',', '；', ';', '。']
+        
+        # 分割文本
+        parts = [action_text]
+        for conn in connectors:
+            new_parts = []
+            for part in parts:
+                new_parts.extend([p.strip() for p in part.split(conn) if p.strip()])
+            parts = new_parts
+        
+        # 过滤太短的片段
+        parts = [p for p in parts if len(p) >= 5]
+        
+        steps = []
+        for i, part in enumerate(parts):
+            step_info = self._analyze_tactical_step(part, i)
+            steps.append(step_info)
+        
+        return steps
+    
+    def _parse_by_step_markers(self, action_text: str) -> List[Dict]:
+        """
+        按步骤标记解析（第一步...第二步...第三步...）
+        增强版，支持更多标记和更灵活的匹配
+        """
+        steps = []
+        
+        # 定义步骤标记模式（按顺序）
+        ordered_markers = [
+            (r'(?:第一步|首先|起初|先)(.+?)(?=第二步|其次|然后|再|又|$)', '首先'),
+            (r'(?:第二步|其次|然后|再)(.+?)(?=第三步|再次|然后|再|又|$)', '然后'),
+            (r'(?:第三步|再次|然后|再)(.+?)(?=第四步|最后|最终|末了|$)', '再然后'),
+            (r'(?:第四步|继而)(.+?)(?=第五步|最后|最终|末了|$)', '继而'),
+            (r'(?:第五步|最后|最终|末了|终)(.+?)(?=$)', '最后'),
+        ]
+        
+        for i, (pattern, marker_type) in enumerate(ordered_markers):
+            match = re.search(pattern, action_text)
+            if match:
+                step_text = match.group(1).strip()
+                # 去除开头的标点
+                step_text = re.sub(r'^[，,；;。．\s]+', '', step_text)
+                if step_text and len(step_text) >= 3:
+                    step_info = self._analyze_tactical_step(step_text, len(steps))
+                    step_info["pattern_type"] = marker_type
+                    steps.append(step_info)
+        
+        return steps
+    
+    def _establish_step_dependencies(self, steps: List[Dict]):
+        """
+        建立步骤间的依赖关系
+        """
+        for i, step in enumerate(steps):
+            purpose = step["purpose"]
+            
+            # 查找依赖定义
+            dep_info = self.STEP_DEPENDENCIES.get(purpose, {})
+            
+            # 检查前置依赖
+            for req in dep_info.get("requires", []):
+                for j in range(i):
+                    if steps[j]["purpose"] == req:
+                        step["dependencies"].append(j)
+                        steps[j]["boosts"].append(i)
+                        break
+            
+            # 自动识别逻辑依赖（诱敌需要埋伏）
+            if purpose in ["诱敌", "诈败"]:
+                for j in range(i):
+                    if steps[j]["purpose"] in ["埋伏", "偷袭"]:
+                        if j not in step["dependencies"]:
+                            step["dependencies"].append(j)
+                            steps[j]["boosts"].append(i)
+    
+    def execute_tactical_check(self, steps: List[Dict]) -> Dict:
+        """
+        执行战术多步骤检定
+        支持任意步骤数，建立完整的依赖链
+        """
+        step_results = []
+        global_effects = {
+            "dc_modifier": 0,
+            "enemy_alert": 0,      # 敌人警觉度
+            "troop_morale": 0,     # 士气变化
+            "troop_losses": 0,     # 兵力损失
+            "opportunities": []    # 创造的机会
+        }
+        
+        # 标记是否继续执行（关键步骤失败可能中断）
+        can_continue = True
+        
+        for i, step in enumerate(steps):
+            if not can_continue:
+                # 标记为跳过
+                step_result = {
+                    "step_index": i,
+                    "step_text": step["text"],
+                    "purpose": step["purpose"],
+                    "status": "跳过",
+                    "reason": "前置关键步骤失败，计划无法继续"
+                }
+                step_results.append(step_result)
+                continue
+            
+            # 计算实际DC
+            adjusted_dc = step["base_dc"] + global_effects["dc_modifier"]
+            
+            # 检查依赖步骤是否成功
+            dep_bonus = 0
+            for dep_idx in step.get("dependencies", []):
+                if dep_idx < len(step_results):
+                    dep_result = step_results[dep_idx]
+                    if dep_result.get("success"):
+                        dep_bonus -= 3  # 依赖成功，DC降低
+                        global_effects["opportunities"].append(f"{step['purpose']}受益于{steps[dep_idx]['purpose']}")
+                    else:
+                        dep_bonus += 5  # 依赖失败，DC大增
+            
+            adjusted_dc += dep_bonus
+            adjusted_dc = max(3, adjusted_dc)  # 最低DC为3
+            
+            # 执行检定
+            profile = ActionProfile(
+                raw_action=step["text"],
+                action_type=step["action_type"],
+                primary_attribute=step["primary_attribute"],
+                secondary_attribute=step["secondary_attribute"],
+                target=step["target"],
+                environment_factor=global_effects["enemy_alert"],
+                time_pressure=0
+            )
+            
+            check_result = self.execute_check(profile, adjusted_dc)
+            
+            # 记录结果
+            step_result = {
+                "step_index": i,
+                "step_text": step["text"],
+                "troop_info": step.get("troop_info"),
+                "purpose": step["purpose"],
+                "target": step["target"],
+                "is_critical": step["is_critical"],
+                "dc": adjusted_dc,
+                "base_dc": step["base_dc"],
+                "check": check_result.to_dict(),
+                "success": check_result.success,
+                "degree": check_result.degree,
+                "dependencies": step.get("dependencies", []),
+                "boosts": step.get("boosts", [])
+            }
+            step_results.append(step_result)
+            
+            # 更新全局效果
+            self._update_tactical_effects(global_effects, step, check_result)
+            
+            # 检查是否关键步骤失败
+            if step["is_critical"] and not check_result.success:
+                if check_result.degree in ["失败", "大失败"]:
+                    can_continue = False
+        
+        # 计算整体结果
+        return self._calculate_tactical_outcome(step_results, global_effects)
+    
+    def _update_tactical_effects(self, effects: Dict, step: Dict, 
+                                  check_result: CheckResult):
+        """
+        更新战术效果
+        """
+        purpose = step["purpose"]
+        
+        # 偷袭成功
+        if purpose == "偷袭":
+            if check_result.success:
+                effects["enemy_alert"] += 2
+                effects["troop_morale"] += 5
+                if check_result.degree == "大成功":
+                    effects["dc_modifier"] -= 3  # 敌军混乱
+            else:
+                effects["troop_losses"] += 10
+                effects["enemy_alert"] += 5
+        
+        # 埋伏成功
+        elif purpose == "埋伏":
+            if check_result.success:
+                effects["dc_modifier"] -= 2
+            else:
+                effects["enemy_alert"] += 3
+                effects["dc_modifier"] += 2
+        
+        # 诱敌成功
+        elif purpose == "诱敌":
+            if check_result.success:
+                effects["dc_modifier"] -= 3
+            else:
+                effects["troop_morale"] -= 10
+                effects["dc_modifier"] += 3
+        
+        # 总攻
+        elif purpose == "总攻":
+            if not check_result.success:
+                effects["troop_losses"] += 20
+                effects["troop_morale"] -= 15
+        
+        # 佯攻
+        elif purpose == "佯攻":
+            if check_result.success:
+                effects["enemy_alert"] -= 1
+    
+    def _calculate_tactical_outcome(self, step_results: List[Dict], 
+                                     global_effects: Dict) -> Dict:
+        """
+        计算战术整体结果
+        """
+        total_steps = len(step_results)
+        successful_steps = sum(1 for r in step_results if r.get("success"))
+        critical_steps = [r for r in step_results if r.get("is_critical")]
+        failed_critical = [r for r in critical_steps if not r.get("success")]
+        
+        # 整体成功判断
+        if failed_critical:
+            overall_success = False
+            overall_degree = "失败" if len(failed_critical) == 1 else "大失败"
+        elif successful_steps == total_steps:
+            overall_success = True
+            overall_degree = "大成功"
+        elif successful_steps >= total_steps * 0.7:
+            overall_success = True
+            overall_degree = "成功"
+        elif successful_steps >= total_steps * 0.4:
+            overall_success = True
+            overall_degree = "勉强成功"
+        else:
+            overall_success = False
+            overall_degree = "失败"
+        
+        # 生成详细叙述
+        narrative = self._generate_tactical_narrative(step_results, global_effects)
+        
+        return {
+            "is_tactical": True,
+            "step_count": total_steps,
+            "successful_steps": successful_steps,
+            "step_results": step_results,
+            "overall_success": overall_success,
+            "overall_degree": overall_degree,
+            "global_effects": global_effects,
+            "narrative": narrative,
+            "casualties": global_effects["troop_losses"],
+            "morale_change": global_effects["troop_morale"]
+        }
+    
+    def _generate_tactical_narrative(self, step_results: List[Dict], 
+                                      global_effects: Dict) -> str:
+        """
+        生成战术执行叙述
+        """
+        parts = []
+        
+        for result in step_results:
+            if result.get("status") == "跳过":
+                parts.append(f"【{result['purpose']}】因前置步骤失败而取消")
+                continue
+            
+            status_icon = "✓" if result["success"] else "✗"
+            dep_info = ""
+            if result.get("dependencies"):
+                dep_info = f" (受益于步骤{[d+1 for d in result['dependencies']]}))"
+            
+            parts.append(f"【{result['purpose']}】{status_icon} {result['degree']}{dep_info}")
+        
+        return " | ".join(parts)
+    
+    # ========== 原复合行动方法（保留兼容性）==========
     
     # 复合行动关键词模式
     COMPOSITE_PATTERNS = [
@@ -1360,16 +1941,20 @@ class UniversalChallengeEngine:
     def evaluate_action(self, action_text: str, context: Dict = None) -> Dict:
         """
         完整评估流程
-        支持复合行动（分步检定）
+        支持复合行动（分步检定）和战术多步骤行动
         """
-        # 1. 检查是否为复合行动
+        # 1. 检查是否为战术多步骤行动（优先）
+        if self.is_tactical_multi_step(action_text):
+            return self._evaluate_tactical_action(action_text, context)
+        
+        # 2. 检查是否为复合行动
         if self.is_composite_action(action_text):
             return self._evaluate_composite_action(action_text, context)
         
-        # 2. 解析行动
+        # 3. 解析行动
         profile = self.analyze_action(action_text, context)
         
-        # 3. 检查叙事取巧（编造资源、跳过检定）
+        # 4. 检查叙事取巧（编造资源、跳过检定）
         cheese_check = self.check_narrative_cheese(action_text)
         if cheese_check["blocked"]:
             return {
@@ -1382,7 +1967,7 @@ class UniversalChallengeEngine:
                 "action_profile": profile.to_dict()
             }
         
-        # 4. 检查硬边界
+        # 5. 检查硬边界
         hard_limit = self.check_hard_limits(profile)
         if hard_limit["blocked"]:
             return {
@@ -1394,16 +1979,16 @@ class UniversalChallengeEngine:
                 "action_profile": profile.to_dict()
             }
         
-        # 5. 计算难度
+        # 6. 计算难度
         difficulty = self.calculate_difficulty(profile)
         
-        # 6. 执行检定
+        # 7. 执行检定
         check_result = self.execute_check(profile)
         
-        # 7. 计算资源消耗
+        # 8. 计算资源消耗
         resource_costs = self.process_resource_cost(profile, check_result)
         
-        # 8. 生成结果
+        # 9. 生成结果
         return {
             "feasible": True,
             "action_profile": profile.to_dict(),
@@ -1413,7 +1998,73 @@ class UniversalChallengeEngine:
             "success": check_result.success,
             "degree": check_result.degree,
             "narrative_template": self._get_narrative_template(check_result, profile),
-            "is_composite": False
+            "is_composite": False,
+            "is_tactical": False
+        }
+    
+    def _evaluate_tactical_action(self, action_text: str, context: Dict = None) -> Dict:
+        """
+        评估战术多步骤行动
+        """
+        # 1. 检查叙事取巧
+        cheese_check = self.check_narrative_cheese(action_text)
+        if cheese_check["blocked"]:
+            return {
+                "feasible": False,
+                "blocked": True,
+                "reason": cheese_check["reason"],
+                "type": cheese_check.get("type"),
+                "cheese_type": cheese_check.get("cheese_type"),
+                "suggestion": cheese_check.get("suggestion")
+            }
+        
+        # 2. 解析战术步骤
+        steps = self.parse_tactical_steps(action_text)
+        
+        if not steps:
+            # 解析失败，回退到单一行动
+            profile = self.analyze_action(action_text, context)
+            check_result = self.execute_check(profile)
+            return {
+                "feasible": True,
+                "is_tactical": False,
+                "check_result": check_result.to_dict(),
+                "success": check_result.success,
+                "degree": check_result.degree
+            }
+        
+        # 3. 执行战术多步骤检定
+        tactical_result = self.execute_tactical_check(steps)
+        
+        # 4. 计算资源消耗
+        resource_costs = {"stamina": -5 * len(steps)}  # 每步5点体力
+        for resource, change in resource_costs.items():
+            current = self.state.player["resources"].get(resource, 0)
+            self.state.player["resources"][resource] = max(0, current + change)
+        
+        # 5. 组装结果
+        return {
+            "feasible": True,
+            "is_tactical": True,
+            "tactical_result": tactical_result,
+            "step_count": tactical_result["step_count"],
+            "step_results": tactical_result["step_results"],
+            "overall_success": tactical_result["overall_success"],
+            "overall_degree": tactical_result["overall_degree"],
+            "check_result": {
+                "success": tactical_result["overall_success"],
+                "degree": tactical_result["overall_degree"],
+                "roll": tactical_result["step_results"][0]["check"]["roll"] if tactical_result["step_results"] else 10,
+                "modifier": 0,
+                "total": tactical_result["step_results"][0]["check"]["total"] if tactical_result["step_results"] else 10,
+                "difficulty": tactical_result["step_results"][0]["dc"] if tactical_result["step_results"] else 10,
+                "margin": 0,
+                "attribute": "TACTICAL"
+            },
+            "resource_costs": resource_costs,
+            "narrative": tactical_result["narrative"],
+            "casualties": tactical_result.get("casualties", 0),
+            "morale_change": tactical_result.get("morale_change", 0)
         }
     
     def _evaluate_composite_action(self, action_text: str, context: Dict = None) -> Dict:
@@ -1727,7 +2378,9 @@ class WorldlineEngine:
             "turn": self.state.turn_count,
             "can_retry": not success and degree != "大失败",
             "is_composite": evaluation.get("is_composite", False),
-            "composite_result": evaluation.get("composite_result") if evaluation.get("is_composite") else None
+            "composite_result": evaluation.get("composite_result") if evaluation.get("is_composite") else None,
+            "is_tactical": evaluation.get("is_tactical", False),
+            "tactical_result": evaluation.get("tactical_result") if evaluation.get("is_tactical") else None
         }
     
     def get_system_prompt(self) -> str:
