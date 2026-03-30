@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Worldline Choice - AI驱动互动叙事游戏引擎 v3.0
+Worldline Choice - AI驱动互动叙事游戏引擎 v3.1
 通用挑战框架版 - 严格检定系统，适应任何世界观
+新增：叙事取巧检测（编造资源、跳过检定）
 """
 
 import json
@@ -626,10 +627,10 @@ class UniversalChallengeEngine:
                 npc_attrs = npc.get("attributes", {})
                 player_attrs = self.state.player.get("attributes", {})
                 
-                # 属性差距检查
+                # 属性差距检查 - 降低阈值到15
                 for attr, npc_val in npc_attrs.items():
                     player_val = player_attrs.get(attr, 10)
-                    if npc_val - player_val >= 30:
+                    if npc_val - player_val >= 15:
                         return {
                             "blocked": True,
                             "rule": f"{attr}差距过大",
@@ -638,6 +639,171 @@ class UniversalChallengeEngine:
                         }
         
         return {"blocked": False}
+    
+    def check_narrative_cheese(self, action_text: str) -> Dict:
+        """
+        检查叙事取巧（编造资源、跳过检定、声明结果）
+        
+        检测类型:
+        1. 编造资源 - 提到不存在的NPC、帮手、物品
+        2. 跳过过程 - 直接声明结果而不经过行动
+        3. 获得新能力 - 凭空获得未习得的能力
+        """
+        action_lower = action_text.lower()
+        
+        # ========== 1. 编造资源检测 ==========
+        fabricated_resources = self._extract_fabricated_resources(action_text)
+        if fabricated_resources:
+            return {
+                "blocked": True,
+                "type": "编造资源",
+                "reason": f"世界中不存在: {', '.join(fabricated_resources)}",
+                "suggestion": "这些资源需要通过游戏过程获得，不能凭空创造",
+                "cheese_type": "fabricated_resources"
+            }
+        
+        # ========== 2. 直接声明结果检测 ==========
+        if self._declares_result_directly(action_text):
+            return {
+                "blocked": True,
+                "type": "跳过检定",
+                "reason": "不能直接声明结果，必须通过检定决定成败",
+                "suggestion": "描述你的行动意图，而非直接声明结果",
+                "cheese_type": "declared_result"
+            }
+        
+        # ========== 3. 凭空获得能力检测 ==========
+        new_abilities = self._extract_new_abilities(action_text)
+        if new_abilities:
+            for ability in new_abilities:
+                if not self._ability_exists(ability):
+                    return {
+                        "blocked": True,
+                        "type": "凭空获得能力",
+                        "reason": f"你尚未习得: {ability}",
+                        "suggestion": "新能力需要通过学习、修炼或剧情获得",
+                        "cheese_type": "new_ability"
+                    }
+        
+        return {"blocked": False}
+    
+    def _extract_fabricated_resources(self, action_text: str) -> List[str]:
+        """
+        提取行动中提到的可能编造的资源
+        """
+        action_lower = action_text.lower()
+        fabricated = []
+        
+        # 检测模式：突然出现的帮手/援军
+        helper_patterns = [
+            r'(身后|突然|不知哪里|凭空)(出现|来了|冒出|冲出)(很多|一群|几个|一些)?(帮手|援军|朋友|同伴|高手)',
+            r'(帮手|援军|朋友|同伴)(突然|不知哪里|凭空)(出现|来了|赶到)',
+            r'(很多|一群|几个)帮手(一起|同时|突然)',
+        ]
+        
+        for pattern in helper_patterns:
+            if re.search(pattern, action_lower):
+                # 检查是否真的有这样的NPC
+                has_helper = False
+                for npc_name in self.state.npcs.keys():
+                    if any(kw in npc_name.lower() for kw in ['帮手', '援军', '朋友', '同伴', '师弟', '师兄', '同门']):
+                        has_helper = True
+                        break
+                
+                # 检查玩家标签
+                has_helper_tag = any(tag in self.state.player.get("tags", []) 
+                                    for tag in ["有援军", "有帮手", "有同伴"])
+                
+                if not has_helper and not has_helper_tag:
+                    fabricated.append("帮手/援军")
+                break
+        
+        # 检测模式：突然拥有的物品
+        item_patterns = [
+            r'(拿出|掏出|取出|使用)(一把|一个|一瓶|一柄|一张)?(神秘|突然|不知何时)(的)?(武器|丹药|符咒|秘籍)',
+            r'发现(自己|身上)有(一把|一个|一瓶)?(从未见过|不知道|神秘)',
+        ]
+        
+        for pattern in item_patterns:
+            if re.search(pattern, action_lower):
+                # 提取可能的物品名
+                fabricated.append("未记录的物品")
+                break
+        
+        return fabricated
+    
+    def _declares_result_directly(self, action_text: str) -> bool:
+        """
+        检测是否直接声明了结果
+        """
+        action_lower = action_text.lower()
+        
+        # 结果声明模式
+        result_patterns = [
+            r'(把|将|让|使).*(打跑|击败|杀死|干掉|制服|搞定|解决).*(了|掉)',
+            r'(成功|顺利|轻松|毫不费力).*(击败|战胜|解决|完成|达成)',
+            r'(一剑|一招|一下就).*(秒杀|击败|杀死|解决)',
+            r'(敌人|对手|对方|目标).*(倒下|死亡|失败|被击败)',
+            r'(然后|接着|最后).*(就).*(成功|完成|解决|达成)',
+        ]
+        
+        for pattern in result_patterns:
+            if re.search(pattern, action_lower):
+                return True
+        
+        # 检测"就"字连接的结果声明
+        # 如"帮手一来，就把山贼打跑了"
+        if re.search(r'就.*(把|将|让).*(打|杀|击败|解决|搞定)', action_lower):
+            return True
+        
+        return False
+    
+    def _extract_new_abilities(self, action_text: str) -> List[str]:
+        """
+        提取提到的可能的新能力
+        """
+        action_lower = action_text.lower()
+        abilities = []
+        
+        # 能力获得模式
+        ability_patterns = [
+            r'(突然|瞬间|忽然)(领悟|觉醒|掌握|学会|获得)(了)?(绝世|强大|神秘|失传|终极)?(剑法|武功|能力|力量|秘籍|法术)',
+            r'(其实|原来)(我|自己)(是|身为|乃)?(隐世|绝世|隐藏|秘密)(高手|传人|弟子|血脉)',
+            r'(觉醒|激发|释放)(了)?(体内|隐藏|沉睡|潜在)(的)?(力量|能力|血脉|潜能)',
+            r'(发现|察觉)(了)?(对方|敌人|目标)(的)?(致命|关键|重要)(弱点|破绽|缺陷)',
+        ]
+        
+        for pattern in ability_patterns:
+            match = re.search(pattern, action_lower)
+            if match:
+                # 提取能力描述
+                abilities.append(match.group(0))
+        
+        return abilities
+    
+    def _ability_exists(self, ability_desc: str) -> bool:
+        """
+        检查能力是否已存在
+        """
+        # 检查玩家标签
+        player_tags = self.state.player.get("tags", [])
+        
+        # 检查是否已学习的能力
+        if "绝世剑法" in ability_desc and "绝世剑法" not in player_tags:
+            return False
+        if "隐世传人" in ability_desc and "隐世传人" not in player_tags:
+            return False
+        if "血脉觉醒" in ability_desc and "血脉觉醒" not in player_tags:
+            return False
+        
+        # 检查是否通过游戏过程获得
+        known_secrets = self.state.player.get("secrets", [])
+        if "弱点" in ability_desc:
+            # 弱点需要通过侦查发现
+            has_discovered = any("弱点" in s for s in known_secrets)
+            return has_discovered
+        
+        return True
     
     def _action_violates_rule(self, profile: ActionProfile, rule: str) -> bool:
         """检查行动是否违反规则"""
@@ -883,7 +1049,20 @@ class UniversalChallengeEngine:
         # 1. 解析行动
         profile = self.analyze_action(action_text, context)
         
-        # 2. 检查硬边界
+        # 2. 检查叙事取巧（编造资源、跳过检定）
+        cheese_check = self.check_narrative_cheese(action_text)
+        if cheese_check["blocked"]:
+            return {
+                "feasible": False,
+                "blocked": True,
+                "reason": cheese_check["reason"],
+                "type": cheese_check.get("type"),
+                "cheese_type": cheese_check.get("cheese_type"),
+                "suggestion": cheese_check.get("suggestion"),
+                "action_profile": profile.to_dict()
+            }
+        
+        # 3. 检查硬边界
         hard_limit = self.check_hard_limits(profile)
         if hard_limit["blocked"]:
             return {
@@ -895,16 +1074,16 @@ class UniversalChallengeEngine:
                 "action_profile": profile.to_dict()
             }
         
-        # 3. 计算难度
+        # 4. 计算难度
         difficulty = self.calculate_difficulty(profile)
         
-        # 4. 执行检定
+        # 5. 执行检定
         check_result = self.execute_check(profile)
         
-        # 5. 计算资源消耗
+        # 6. 计算资源消耗
         resource_costs = self.process_resource_cost(profile, check_result)
         
-        # 6. 生成结果
+        # 7. 生成结果
         return {
             "feasible": True,
             "action_profile": profile.to_dict(),
