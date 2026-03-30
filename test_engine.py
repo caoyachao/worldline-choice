@@ -208,6 +208,98 @@ def test_ending_generation():
     print(f"  Prompt长度: {len(ending_prompt)} 字符\n")
 
 
+def test_layered_history_storage():
+    """测试分层历史存储系统 - 核心功能"""
+    print("="*50)
+    print("测试6.5: 分层历史存储系统")
+    print("="*50)
+    
+    engine = WorldlineEngine()
+    engine.start_game("测试存储", "测试者", "玩家")
+    
+    # 模拟30个回合的游戏过程
+    print("  模拟30回合游戏...")
+    for i in range(30):
+        consequences = {
+            "attribute_changes": {"武力": 1 if i % 3 == 0 else 0},
+            "tags_added": [f"标签{i}"] if i % 5 == 0 else []
+        }
+        engine.state.add_history(f"行动{i+1}", f"这是第{i+1}回合的结果描述", consequences)
+    
+    # 验证原始历史完整保存
+    assert len(engine.state.raw_history) == 30, f"原始历史应该有30条，实际有{len(engine.state.raw_history)}条"
+    print(f"✓ 原始历史完整保存: {len(engine.state.raw_history)} 回合")
+    
+    # 验证分层摘要生成
+    assert len(engine.state.history_summaries) >= 2, "应该有至少2个阶段摘要"
+    print(f"✓ 阶段摘要生成: {len(engine.state.history_summaries)} 个")
+    
+    # 验证回合编号正确
+    for i, record in enumerate(engine.state.raw_history):
+        assert record["turn"] == i + 1, f"第{i}条记录的回合数应该是{i+1}"
+    print("✓ 回合编号正确")
+    
+    # 验证精简摘要生成
+    assert all("summary" in r for r in engine.state.raw_history), "所有记录应该有摘要"
+    print("✓ 回合摘要自动生成")
+    
+    # 测试AI上下文组装
+    ai_context = engine.state.get_history_for_ai()
+    assert "最近5回合" in ai_context or "回合" in ai_context, "AI上下文应包含历史信息"
+    print("✓ AI上下文组装成功")
+    print(f"  AI上下文长度: {len(ai_context)} 字符")
+    
+    # 测试存档包含完整历史
+    temp_dir = tempfile.mkdtemp()
+    try:
+        engine.save_dir = temp_dir
+        save_path = engine.save_game("history_test")
+        
+        # 加载并验证
+        new_engine = WorldlineEngine()
+        new_engine.save_dir = temp_dir
+        new_engine.load_game("history_test")
+        
+        assert len(new_engine.state.raw_history) == 30, "加载后原始历史应完整"
+        assert len(new_engine.state.history_summaries) == len(engine.state.history_summaries), "摘要应保留"
+        print("✓ 存档/加载保留完整历史")
+        
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    print("✓ 分层历史存储系统测试通过\n")
+
+
+def test_milestone_tracking():
+    """测试里程碑自动追踪"""
+    print("="*50)
+    print("测试6.6: 里程碑追踪")
+    print("="*50)
+    
+    engine = WorldlineEngine()
+    engine.start_game("三国", "谋士", "诸葛亮")
+    
+    # 添加里程碑事件
+    engine.state.flags["投曹"] = True
+    engine.state.add_history("决定投靠曹操", "你成为了曹操的谋士")
+    
+    engine.state.flags["官渡胜利"] = True
+    engine.state.add_history("献策乌巢", "成功奇袭乌巢，袁绍大败")
+    
+    # 验证里程碑记录
+    assert len(engine.state.milestones) >= 2, "应该记录至少2个里程碑"
+    milestone_flags = [m["flag"] for m in engine.state.milestones]
+    assert "投曹" in milestone_flags, "应该记录'投曹'里程碑"
+    print(f"✓ 里程碑自动追踪: {len(engine.state.milestones)} 个")
+    print(f"  里程碑: {milestone_flags}")
+    
+    # 验证里程碑在AI上下文中有体现
+    ai_context = engine.state.get_history_for_ai()
+    assert "投曹" in ai_context or "官渡" in ai_context, "里程碑应在AI上下文中"
+    print("✓ 里程碑出现在AI上下文中")
+    print("✓ 里程碑追踪测试通过\n")
+
+
 def test_different_roles():
     """测试不同角色类型的属性生成"""
     print("="*50)
@@ -316,6 +408,8 @@ def run_all_tests():
         test_action_processing()
         test_save_load()
         test_ending_generation()
+        test_layered_history_storage()
+        test_milestone_tracking()
         test_different_roles()
         test_complex_scenario()
         
