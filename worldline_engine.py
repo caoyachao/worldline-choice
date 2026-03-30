@@ -619,6 +619,13 @@ class UniversalChallengeEngine:
         """
         action_clean = action_text.lower().replace(' ', '').replace('，', ',')
         
+        # 方法0: 检测数字标识模式（1. 2. 3. 或 1、2、3、）
+        # 这是用户明确标记的多步骤格式，最可靠
+        number_pattern = r'(?:^|\D)([1-9])\s*[\.、\)）]\s*'
+        number_matches = list(re.finditer(number_pattern, action_text))
+        if len(number_matches) >= 2:
+            return True
+        
         # 检测是否有多个"派..."或"安排..."结构
         dispatch_count = len(re.findall(r'(?:派|安排|命令|令)', action_clean))
         if dispatch_count >= 2:
@@ -654,14 +661,21 @@ class UniversalChallengeEngine:
         """
         解析战术多步骤行动 - v3.3增强版
         支持任意数量的步骤，多种句式混合
+        优先级：数字标识 > 综合模式 > 步骤标记 > 连接词
         """
         # 清理文本
         action_clean = action_text.lower().replace(' ', '').replace('，', ',').replace('。', ',').replace('\n', ',')
         
         steps = []
         
+        # 方法0: 数字标识解析（优先级最高，用户明确标记）
+        number_steps = self._parse_by_number_markers(action_text)
+        if len(number_steps) >= 2:
+            steps = number_steps
+        
         # 方法1: 综合模式解析（支持多种句式混合）
-        steps = self._parse_comprehensive(action_clean)
+        if not steps:
+            steps = self._parse_comprehensive(action_clean)
         
         # 方法2: 如果综合解析步骤太少，尝试按步骤标记解析
         if len(steps) < 2:
@@ -952,6 +966,64 @@ class UniversalChallengeEngine:
         
         return steps
     
+    def _parse_by_number_markers(self, action_text: str) -> List[Dict]:
+        """
+        按数字标识解析步骤（用户明确标记的格式）
+        格式: 1. 行动A，2. 行动B，3. 行动C
+        或:   1、行动A，2、行动B
+        或:   1) 行动A，2) 行动B
+        
+        相同数字 = 同时发生（复合行动）
+        不同数字 = 顺序发生
+        """
+        steps = []
+        
+        # 数字标识模式: 数字 + [./、)] + 空格 + 内容
+        # 捕获: 数字标记和对应的行动内容
+        number_pattern = r'([1-9])\s*[\.、\)）]\s*([^\n,，；;。]+)'
+        matches = list(re.finditer(number_pattern, action_text))
+        
+        if len(matches) < 2:
+            return steps
+        
+        # 按数字分组
+        number_groups = {}
+        for match in matches:
+            number = int(match.group(1))
+            action_desc = match.group(2).strip()
+            if action_desc and len(action_desc) >= 2:
+                if number not in number_groups:
+                    number_groups[number] = []
+                number_groups[number].append(action_desc)
+        
+        # 按数字排序处理
+        sorted_numbers = sorted(number_groups.keys())
+        step_index = 0
+        
+        for number in sorted_numbers:
+            actions = number_groups[number]
+            
+            if len(actions) == 1:
+                # 单个行动
+                step_info = self._analyze_tactical_step(actions[0], step_index)
+                step_info["pattern_type"] = f"步骤{number}"
+                step_info["step_number"] = number
+                steps.append(step_info)
+                step_index += 1
+            else:
+                # 多个行动共享同一数字 = 同时发生（复合行动）
+                # 合并为一个复合步骤
+                combined_action = "同时：" + "；".join(actions)
+                step_info = self._analyze_tactical_step(combined_action, step_index)
+                step_info["pattern_type"] = f"步骤{number}[同时]"
+                step_info["step_number"] = number
+                step_info["is_composite"] = True
+                step_info["sub_actions"] = actions
+                steps.append(step_info)
+                step_index += 1
+        
+        return steps
+    
     def _establish_step_dependencies(self, steps: List[Dict]):
         """
         建立步骤间的依赖关系
@@ -982,6 +1054,7 @@ class UniversalChallengeEngine:
         """
         执行战术多步骤检定
         支持任意步骤数，建立完整的依赖链
+        支持复合步骤（同时发生的多个行动）
         """
         step_results = []
         global_effects = {
@@ -1008,6 +1081,87 @@ class UniversalChallengeEngine:
                 step_results.append(step_result)
                 continue
             
+            # 复合步骤处理（同时发生的多个行动）
+            if step.get("is_composite") and step.get("sub_actions"):
+                sub_results = []
+                all_success = True
+                any_critical_fail = False
+                
+                # 对每个子行动分别检定
+                for sub_action in step["sub_actions"]:
+                    sub_profile = ActionProfile(
+                        raw_action=sub_action,
+                        action_type=step["action_type"],
+                        primary_attribute=step["primary_attribute"],
+                        secondary_attribute=step["secondary_attribute"],
+                        target=step["target"],
+                        environment_factor=global_effects["enemy_alert"],
+                        time_pressure=0
+                    )
+                    
+                    # 复合步骤DC+2（同时执行更困难）
+                    sub_dc = step["base_dc"] + global_effects["dc_modifier"] + 2
+                    sub_dc = max(3, sub_dc)
+                    
+                    sub_check = self.execute_check(sub_profile, sub_dc)
+                    sub_results.append({
+                        "action": sub_action,
+                        "check": sub_check.to_dict(),
+                        "success": sub_check.success,
+                        "degree": sub_check.degree
+                    })
+                    
+                    if not sub_check.success:
+                        all_success = False
+                        if sub_check.degree in ["失败", "大失败"]:
+                            any_critical_fail = True
+                
+                # 复合步骤整体结果
+                composite_success = all_success or not any_critical_fail
+                # 确定整体程度
+                if all_success and all(r["check"]["margin"] >= 5 for r in sub_results):
+                    composite_degree = "成功"
+                elif all_success:
+                    composite_degree = "勉强成功"
+                elif not any_critical_fail:
+                    composite_degree = "勉强失败"
+                else:
+                    composite_degree = "失败"
+                
+                step_result = {
+                    "step_index": i,
+                    "step_text": step["text"],
+                    "troop_info": step.get("troop_info"),
+                    "purpose": step["purpose"],
+                    "target": step["target"],
+                    "is_critical": step["is_critical"],
+                    "is_composite": True,
+                    "sub_results": sub_results,
+                    "dc": step["base_dc"] + 2,
+                    "base_dc": step["base_dc"],
+                    "check": sub_results[0]["check"] if sub_results else {},  # 使用第一个作为代表
+                    "success": composite_success,
+                    "degree": composite_degree,
+                    "dependencies": step.get("dependencies", []),
+                    "boosts": step.get("boosts", [])
+                }
+                step_results.append(step_result)
+                
+                # 更新全局效果（基于复合结果）
+                if composite_success:
+                    global_effects["dc_modifier"] -= 2
+                    global_effects["opportunities"].append(f"{step['purpose']}同步成功")
+                else:
+                    global_effects["enemy_alert"] += 1
+                    global_effects["dc_modifier"] += 1
+                
+                # 检查是否关键步骤失败
+                if step["is_critical"] and not composite_success and any_critical_fail:
+                    can_continue = False
+                
+                continue
+            
+            # 普通步骤处理
             # 计算实际DC
             adjusted_dc = step["base_dc"] + global_effects["dc_modifier"]
             
