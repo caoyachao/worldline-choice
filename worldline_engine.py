@@ -207,19 +207,37 @@ class GameState:
         # 结局
         self.ending_triggered = False
         self.ending_type = None
-        
+
         # 代价追踪
         self.costs_paid: List[Dict] = []
         self.moral_corruption = 0
         self.broken_trust: List[str] = []
-        
+
         # 自适应难度
         self.difficulty_bias = 0
         self.edge_cases: List[Dict] = []
-        
+
         # 元数据
         self.start_time = datetime.now().isoformat()
         self.total_play_time_minutes = 0
+
+        # ========== v3.3.2 富结构存储字段 (兼容 save_manager.py) ==========
+        self.world_state = {
+            "current_date": "",
+            "current_time": "",
+            "current_location": "",
+            "scene_description": "",
+            "global_events": []
+        }
+        self.session_history: List[Dict] = []
+        self.npc_database: Dict[str, Dict] = {}
+        self.active_quests: List[Dict] = []
+        self.inventory = {
+            "documents": [],
+            "contacts": [],
+            "intelligence": []
+        }
+        self.story_flags: Dict[str, Any] = {}
     
     def initialize_resources(self):
         """初始化通用资源"""
@@ -241,8 +259,189 @@ class GameState:
             "time": 10,
             "reputation": 0
         }
-    
+
+    # ========== 同步辅助方法 ==========
+
+    def _sync_to_rich(self):
+        """将运行时扁平字段同步到富结构存储"""
+        self.world_state["scene_description"] = self.world_description or self.world_state.get("scene_description", "")
+        self.world_state["current_location"] = self.current_scene or self.world_state.get("current_location", "")
+        self.story_flags = self.flags.copy()
+        for name, info in self.npcs.items():
+            npc_id = name
+            if npc_id not in self.npc_database:
+                self.create_npc_rich(npc_id, name, info.get("identity", ""), location=info.get("location", ""))
+            db_npc = self.npc_database[npc_id]
+            rel = info.get("relationship", 0)
+            db_npc["relationship_matrix"]["towards_player"]["trust"]["value"] = max(0, min(10, 5 + rel // 10))
+            db_npc["relationship_matrix"]["towards_player"]["respect"]["value"] = max(0, min(10, 5 + rel // 20))
+            db_npc["relationship_matrix"]["towards_player"]["fear"]["value"] = max(0, min(10, 0 - rel // 15 if rel < 0 else 0))
+            db_npc["current_state"]["mood"] = info.get("attitude", "neutral")
+            db_npc["current_state"]["status"] = info.get("status", "正常")
+
+    def _sync_from_rich(self):
+        """从富结构存储恢复到运行时扁平字段"""
+        if not self.world_description and self.world_state.get("scene_description"):
+            self.world_description = self.world_state["scene_description"]
+        if not self.current_scene and self.world_state.get("current_location"):
+            self.current_scene = self.world_state["current_location"]
+        if not self.flags and self.story_flags:
+            self.flags = self.story_flags.copy()
+        for npc_id, info in self.npc_database.items():
+            name = info.get("basic_info", {}).get("name", npc_id)
+            matrix = info.get("relationship_matrix", {}).get("towards_player", {})
+            trust = matrix.get("trust", {}).get("value", 5)
+            respect = matrix.get("respect", {}).get("value", 5)
+            fear = matrix.get("fear", {}).get("value", 0)
+            relationship = (trust - 5) * 10 + (respect - 5) * 5 - fear * 5
+            attitude = info.get("current_state", {}).get("mood", "中立")
+            status = info.get("current_state", {}).get("status", "正常")
+            self.npcs[name] = {
+                "relationship": relationship,
+                "attitude": attitude,
+                "secrets": info.get("knowledge_state", {}).get("secrets_known_by_player", []),
+                "status": status,
+                "attributes": {}
+            }
+
+    # ========== 富结构操作 ==========
+
+    def update_world_state(self, date: str = None, time: str = None, location: str = None, description: str = None):
+        if date:
+            self.world_state["current_date"] = date
+        if time:
+            self.world_state["current_time"] = time
+        if location:
+            self.world_state["current_location"] = location
+            self.current_scene = location
+        if description:
+            self.world_state["scene_description"] = description
+            self.world_description = description
+
+    def add_session(self, game_time_start: str, scene_summary: str = "") -> int:
+        session_id = len(self.session_history) + 1
+        session = {
+            "session_id": f"session_{session_id:03d}",
+            "real_world_time": datetime.now().isoformat(),
+            "game_time_start": game_time_start,
+            "game_time_end": "",
+            "scene_summary": scene_summary,
+            "entries": [],
+            "session_outcome": {
+                "resources_gained": [], "resources_lost": [],
+                "intelligence_gained": [], "items_gained": [],
+                "relationship_changes": [], "quests_completed": [],
+                "quests_started": [], "pending_decisions": []
+            }
+        }
+        self.session_history.append(session)
+        return session_id - 1
+
+    def add_session_entry(self, session_idx: int, entry_type: str, timestamp: str, content: str, **extra):
+        if session_idx < 0 or session_idx >= len(self.session_history):
+            return
+        entry_id = f"e{len(self.session_history[session_idx]['entries']) + 1:03d}"
+        entry = {"entry_id": entry_id, "type": entry_type, "timestamp": timestamp, "content": content}
+        entry.update(extra)
+        self.session_history[session_idx]["entries"].append(entry)
+
+    def end_session(self, session_idx: int, game_time_end: str, outcome: Dict = None):
+        if session_idx < 0 or session_idx >= len(self.session_history):
+            return
+        self.session_history[session_idx]["game_time_end"] = game_time_end
+        if outcome:
+            self.session_history[session_idx]["session_outcome"].update(outcome)
+
+    def create_npc_rich(self, npc_id: str, name: str, identity: str, faction: str = "", location: str = "", aliases: List[str] = None):
+        self.npc_database[npc_id] = {
+            "basic_info": {"name": name, "aliases": aliases or [], "identity": identity, "faction": faction, "location": location},
+            "relationship_matrix": {
+                "towards_player": {
+                    "trust": {"value": 5, "max": 10, "trend": "stable"},
+                    "respect": {"value": 5, "max": 10, "trend": "stable"},
+                    "fear": {"value": 0, "max": 10, "trend": "stable"},
+                    "affection": {"value": 0, "max": 10, "trend": "stable"},
+                    "interest": {"value": 5, "max": 10, "trend": "stable"},
+                    "dislike": {"value": 0, "max": 10, "trend": "stable"},
+                    "hatred": {"value": 0, "max": 10, "trend": "stable"},
+                    "jealousy": {"value": 0, "max": 10, "trend": "stable"},
+                    "contempt": {"value": 0, "max": 10, "trend": "stable"}
+                },
+                "player_towards": {"trust": 5, "respect": 5, "fear": 0, "interest": 5, "dislike": 0, "hatred": 0}
+            },
+            "knowledge_state": {"secrets_known_by_npc": [], "secrets_known_by_player": [], "misconceptions": []},
+            "interaction_history": [],
+            "current_state": {"mood": "neutral", "urgency": "normal", "goals": [], "pressure": "none", "available_actions": [], "status": "正常"},
+            "social_network": {"allies": [], "enemies": [], "subordinates": [], "family": [], "business_partners": []}
+        }
+
+    def update_npc_relationship_rich(self, npc_id: str, relationship_type: str, delta: int):
+        if npc_id not in self.npc_database:
+            return
+        matrix = self.npc_database[npc_id]["relationship_matrix"]["towards_player"]
+        if relationship_type not in matrix:
+            matrix[relationship_type] = {"value": 5, "max": 10, "trend": "stable"}
+        current = matrix[relationship_type]["value"]
+        max_val = matrix[relationship_type].get("max", 10)
+        new_value = max(0, min(max_val, current + delta))
+        matrix[relationship_type]["value"] = new_value
+        if delta > 0:
+            matrix[relationship_type]["trend"] = "rising"
+        elif delta < 0:
+            matrix[relationship_type]["trend"] = "declining"
+        else:
+            matrix[relationship_type]["trend"] = "stable"
+
+    def create_quest(self, quest_id: str, title: str, quest_type: str, description: str, deadline: str = "", related_npcs: List[str] = None, possible_approaches: List[str] = None):
+        quest = {
+            "quest_id": quest_id, "title": title, "type": quest_type, "description": description,
+            "status": "pending", "deadline": deadline, "related_npcs": related_npcs or [],
+            "possible_approaches": possible_approaches or [], "stakes": "normal", "failure_consequences": []
+        }
+        self.active_quests.append(quest)
+
+    def update_quest_status(self, quest_id: str, status: str):
+        for quest in self.active_quests:
+            if quest["quest_id"] == quest_id:
+                quest["status"] = status
+                break
+
+    def add_inventory_item(self, category: str, item: str):
+        if category in self.inventory and item not in self.inventory[category]:
+            self.inventory[category].append(item)
+
+    def add_global_event(self, event: str, impact: str, duration: str):
+        self.world_state["global_events"].append({"event": event, "impact": impact, "duration": duration})
+
+    def set_story_flag(self, flag: str, value: Any = True):
+        self.story_flags[flag] = value
+        self.flags[flag] = value
+
+    def get_story_flag(self, flag: str) -> Any:
+        return self.story_flags.get(flag, self.flags.get(flag, False))
+
     def to_dict(self) -> Dict:
+        self._sync_to_rich()
+        player_attributes_structured = {}
+        for name, value in self.player.get("attributes", {}).items():
+            if isinstance(value, dict) and "value" in value:
+                player_attributes_structured[name] = value
+            else:
+                player_attributes_structured[name] = {"value": value, "modifier": (value - 10) // 2}
+        player_resources_structured = {}
+        for name, value in self.player.get("resources", {}).items():
+            if isinstance(value, dict) and "value" in value:
+                player_resources_structured[name] = value
+            else:
+                player_resources_structured[name] = {"type": "custom", "value": value, "unit": "points"}
+        metadata = {
+            "game_id": "", "game_title": self.world_setting, "world_setting": self.world_setting,
+            "engine_version": f"worldline-choice-v{self.VERSION}", "created_at": self.start_time,
+            "last_saved": datetime.now().isoformat(), "total_sessions": len(self.session_history)
+        }
+        rich_player = dict(self.player)
+        rich_player["attributes"] = player_attributes_structured
+        rich_player["resources"] = player_resources_structured
         return {
             "version": self.VERSION,
             "save_time": datetime.now().isoformat(),
@@ -252,7 +451,7 @@ class GameState:
             "current_scene": self.current_scene,
             "scene_context": self.scene_context,
             "turn_count": self.turn_count,
-            "player": self.player,
+            "player": rich_player,
             "npcs": self.npcs,
             "flags": self.flags,
             "history": {
@@ -268,10 +467,14 @@ class GameState:
             "broken_trust": self.broken_trust,
             "difficulty_bias": self.difficulty_bias,
             "edge_cases": self.edge_cases,
-            "metadata": {
-                "start_time": self.start_time,
-                "total_play_time_minutes": self.total_play_time_minutes
-            }
+            # v3.3.2 富结构字段 (save_manager.py 兼容)
+            "metadata": metadata,
+            "world_state": self.world_state,
+            "session_history": self.session_history,
+            "npc_database": self.npc_database,
+            "active_quests": self.active_quests,
+            "inventory": self.inventory,
+            "story_flags": self.story_flags
         }
     
     @classmethod
@@ -322,7 +525,29 @@ class GameState:
         metadata = data.get("metadata", {})
         state.start_time = metadata.get("start_time", datetime.now().isoformat())
         state.total_play_time_minutes = metadata.get("total_play_time_minutes", 0)
-        
+
+        # 恢复 v3.3.2 富结构字段
+        state.world_state = data.get("world_state", state.world_state)
+        state.session_history = data.get("session_history", state.session_history)
+        state.npc_database = data.get("npc_database", state.npc_database)
+        state.active_quests = data.get("active_quests", state.active_quests)
+        state.inventory = data.get("inventory", state.inventory)
+        state.story_flags = data.get("story_flags", state.story_flags)
+
+        # 如果 player 是以富结构加载的，恢复扁平格式供运行时兼容
+        player_data = data.get("player", state.player)
+        attrs_data = player_data.get("attributes", {})
+        if attrs_data and isinstance(next(iter(attrs_data.values())), dict):
+            flat_attrs = {}
+            for k, v in attrs_data.items():
+                flat_attrs[k] = v["value"] if isinstance(v, dict) and "value" in v else v
+            state.player["attributes"] = flat_attrs
+            flat_resources = {}
+            for k, v in player_data.get("resources", {}).items():
+                flat_resources[k] = v["value"] if isinstance(v, dict) and "value" in v else v
+            state.player["resources"] = flat_resources
+
+        state._sync_from_rich()
         return state
     
     def update_npc(self, name: str, **kwargs):
@@ -389,8 +614,18 @@ class GameState:
     def _check_milestones(self):
         """检查里程碑"""
         important_flags = ["投曹", "投袁", "自立", "背叛", "结盟", "死亡", "胜利"]
+        # 首先记录预定义的重要标记
         for flag in important_flags:
             if flag in self.flags and flag not in [m.get("flag") for m in self.milestones]:
+                self.milestones.append({
+                    "turn": self.turn_count,
+                    "flag": flag,
+                    "description": f"达成: {flag}",
+                    "timestamp": datetime.now().isoformat()
+                })
+        # 同时将所有剧情标记记录为里程碑
+        for flag in self.flags:
+            if flag not in [m.get("flag") for m in self.milestones]:
                 self.milestones.append({
                     "turn": self.turn_count,
                     "flag": flag,
@@ -1050,27 +1285,40 @@ class UniversalChallengeEngine:
                             step["dependencies"].append(j)
                             steps[j]["boosts"].append(i)
     
+    def _calculate_next_dc_modifier(self, degree: str) -> int:
+        """v3.3.2 防套利：计算步骤结果对后续DC的影响"""
+        mapping = {
+            "大成功": -5,
+            "成功": -3,
+            "勉强成功": -1,  # 补丁A：勉强成功仅-1
+            "勉强失败": 0,
+            "失败": 5,
+            "大失败": 5,
+        }
+        return mapping.get(degree, 0)
+
     def execute_tactical_check(self, steps: List[Dict]) -> Dict:
         """
         执行战术多步骤检定
         支持任意步骤数，建立完整的依赖链
         支持复合步骤（同时发生的多个行动）
+        v3.3.2 新增：勉强成功降级、指挥链过载、信息泄露
         """
         step_results = []
         global_effects = {
             "dc_modifier": 0,
-            "enemy_alert": 0,      # 敌人警觉度
-            "troop_morale": 0,     # 士气变化
-            "troop_losses": 0,     # 兵力损失
-            "opportunities": []    # 创造的机会
+            "enemy_alert": 0,
+            "troop_morale": 0,
+            "troop_losses": 0,
+            "opportunities": []
         }
-        
-        # 标记是否继续执行（关键步骤失败可能中断）
+        info_leak_count = 0
         can_continue = True
-        
+
         for i, step in enumerate(steps):
+            step_num = i + 1
+
             if not can_continue:
-                # 标记为跳过
                 step_result = {
                     "step_index": i,
                     "step_text": step["text"],
@@ -1080,14 +1328,17 @@ class UniversalChallengeEngine:
                 }
                 step_results.append(step_result)
                 continue
-            
-            # 复合步骤处理（同时发生的多个行动）
+
+            # 计算指挥链过载（补丁B）：第4步起每步+1
+            overload_penalty = max(0, step_num - 3)
+
+            # 复合步骤处理
             if step.get("is_composite") and step.get("sub_actions"):
                 sub_results = []
                 all_success = True
                 any_critical_fail = False
-                
-                # 对每个子行动分别检定
+                any_natural_one = False
+
                 for sub_action in step["sub_actions"]:
                     sub_profile = ActionProfile(
                         raw_action=sub_action,
@@ -1098,11 +1349,10 @@ class UniversalChallengeEngine:
                         environment_factor=global_effects["enemy_alert"],
                         time_pressure=0
                     )
-                    
-                    # 复合步骤DC+2（同时执行更困难）
-                    sub_dc = step["base_dc"] + global_effects["dc_modifier"] + 2
+                    # 复合步骤DC+2 + 全局修正 + 信息泄露 + 指挥链过载
+                    sub_dc = step["base_dc"] + global_effects["dc_modifier"] + 2 + info_leak_count * 2 + overload_penalty
                     sub_dc = max(3, sub_dc)
-                    
+
                     sub_check = self.execute_check(sub_profile, sub_dc)
                     sub_results.append({
                         "action": sub_action,
@@ -1110,15 +1360,15 @@ class UniversalChallengeEngine:
                         "success": sub_check.success,
                         "degree": sub_check.degree
                     })
-                    
+
                     if not sub_check.success:
                         all_success = False
                         if sub_check.degree in ["失败", "大失败"]:
                             any_critical_fail = True
-                
-                # 复合步骤整体结果
+                    if sub_check.roll == 1:
+                        any_natural_one = True
+
                 composite_success = all_success or not any_critical_fail
-                # 确定整体程度
                 if all_success and all(r["check"]["margin"] >= 5 for r in sub_results):
                     composite_degree = "成功"
                 elif all_success:
@@ -1127,7 +1377,7 @@ class UniversalChallengeEngine:
                     composite_degree = "勉强失败"
                 else:
                     composite_degree = "失败"
-                
+
                 step_result = {
                     "step_index": i,
                     "step_text": step["text"],
@@ -1137,49 +1387,50 @@ class UniversalChallengeEngine:
                     "is_critical": step["is_critical"],
                     "is_composite": True,
                     "sub_results": sub_results,
-                    "dc": step["base_dc"] + 2,
+                    "dc": step["base_dc"] + 2 + info_leak_count * 2 + overload_penalty,
                     "base_dc": step["base_dc"],
-                    "check": sub_results[0]["check"] if sub_results else {},  # 使用第一个作为代表
+                    "check": sub_results[0]["check"] if sub_results else {},
                     "success": composite_success,
                     "degree": composite_degree,
                     "dependencies": step.get("dependencies", []),
                     "boosts": step.get("boosts", [])
                 }
                 step_results.append(step_result)
-                
-                # 更新全局效果（基于复合结果）
+
+                # 防套利DC修正
+                global_effects["dc_modifier"] += self._calculate_next_dc_modifier(composite_degree)
+                # 战术效果
                 if composite_success:
-                    global_effects["dc_modifier"] -= 2
                     global_effects["opportunities"].append(f"{step['purpose']}同步成功")
                 else:
                     global_effects["enemy_alert"] += 1
-                    global_effects["dc_modifier"] += 1
-                
-                # 检查是否关键步骤失败
+
+                # 信息泄露（补丁C）
+                if any_natural_one or composite_degree in ["失败", "大失败"]:
+                    info_leak_count += 1
+                    step_result["info_leak_triggered"] = True
+
                 if step["is_critical"] and not composite_success and any_critical_fail:
                     can_continue = False
-                
+
                 continue
-            
+
             # 普通步骤处理
-            # 计算实际DC
-            adjusted_dc = step["base_dc"] + global_effects["dc_modifier"]
-            
-            # 检查依赖步骤是否成功
+            adjusted_dc = step["base_dc"] + global_effects["dc_modifier"] + info_leak_count * 2 + overload_penalty
+
             dep_bonus = 0
             for dep_idx in step.get("dependencies", []):
                 if dep_idx < len(step_results):
                     dep_result = step_results[dep_idx]
                     if dep_result.get("success"):
-                        dep_bonus -= 3  # 依赖成功，DC降低
+                        dep_bonus -= 3
                         global_effects["opportunities"].append(f"{step['purpose']}受益于{steps[dep_idx]['purpose']}")
                     else:
-                        dep_bonus += 5  # 依赖失败，DC大增
-            
+                        dep_bonus += 5
+
             adjusted_dc += dep_bonus
-            adjusted_dc = max(3, adjusted_dc)  # 最低DC为3
-            
-            # 执行检定
+            adjusted_dc = max(3, adjusted_dc)
+
             profile = ActionProfile(
                 raw_action=step["text"],
                 action_type=step["action_type"],
@@ -1189,10 +1440,9 @@ class UniversalChallengeEngine:
                 environment_factor=global_effects["enemy_alert"],
                 time_pressure=0
             )
-            
+
             check_result = self.execute_check(profile, adjusted_dc)
-            
-            # 记录结果
+
             step_result = {
                 "step_index": i,
                 "step_text": step["text"],
@@ -1209,15 +1459,22 @@ class UniversalChallengeEngine:
                 "boosts": step.get("boosts", [])
             }
             step_results.append(step_result)
-            
-            # 更新全局效果
+
+            # v3.3.2 防套利DC修正
+            global_effects["dc_modifier"] += self._calculate_next_dc_modifier(check_result.degree)
+
+            # 战术效果
             self._update_tactical_effects(global_effects, step, check_result)
-            
-            # 检查是否关键步骤失败
+
+            # 信息泄露（自然1 或 大失败/失败）
+            if check_result.roll == 1 or check_result.degree in ["失败", "大失败"]:
+                info_leak_count += 1
+                step_result["info_leak_triggered"] = True
+
             if step["is_critical"] and not check_result.success:
                 if check_result.degree in ["失败", "大失败"]:
                     can_continue = False
-        
+
         # 计算整体结果
         return self._calculate_tactical_outcome(step_results, global_effects)
     
@@ -2714,6 +2971,158 @@ class WorldlineEngine:
             self.challenge_engine = UniversalChallengeEngine(self.state)
         return True
     
+    def process_action(self, player_input: str, ai_response: Dict) -> Dict:
+        """
+        处理玩家行动并应用AI返回的状态更新
+        """
+        if not self.challenge_engine:
+            return {"error": "游戏未初始化"}
+
+        # 获取 / 验证回合号
+        turn_before = self.state.turn_count
+
+        # 应用属性变化
+        attr_changes = ai_response.get("consequences", {}).get("attribute_changes", {})
+        for attr, delta in attr_changes.items():
+            if attr in self.state.player.get("attributes", {}):
+                self.state.player["attributes"][attr] += delta
+
+        # 应用关系变化（扁平 + 富结构）
+        rel_changes = ai_response.get("consequences", {}).get("relationship_changes", {})
+        for npc_name, delta in rel_changes.items():
+            if npc_name in self.state.npcs:
+                self.state.npcs[npc_name]["relationship"] += delta
+            else:
+                self.state.update_npc(npc_name, relationship=delta)
+            # 同步到富结构
+            npc_id = npc_name
+            if npc_id not in self.state.npc_database:
+                self.state.create_npc_rich(npc_id, npc_name, "")
+            self.state.update_npc_relationship_rich(npc_id, "trust", delta // 10)
+            self.state.update_npc_relationship_rich(npc_id, "respect", delta // 20)
+
+        # 应用物品变化
+        items_gained = ai_response.get("consequences", {}).get("items_gained", [])
+        for item in items_gained:
+            if item not in self.state.player.get("items", []):
+                self.state.player.setdefault("items", []).append(item)
+            self.state.add_inventory_item("documents", item)
+
+        items_lost = ai_response.get("consequences", {}).get("items_lost", [])
+        for item in items_lost:
+            if item in self.state.player.get("items", []):
+                self.state.player["items"].remove(item)
+            for cat in self.state.inventory:
+                if item in self.state.inventory[cat]:
+                    self.state.inventory[cat].remove(item)
+
+        # 标签
+        tags_added = ai_response.get("consequences", {}).get("tags_added", [])
+        for tag in tags_added:
+            if tag not in self.state.player.get("tags", []):
+                self.state.player.setdefault("tags", []).append(tag)
+
+        # 秘密
+        secrets_learned = ai_response.get("consequences", {}).get("secrets_learned", [])
+        for secret in secrets_learned:
+            if secret not in self.state.player.get("secrets", []):
+                self.state.player.setdefault("secrets", []).append(secret)
+            for npc_info in self.state.npc_database.values():
+                if secret not in npc_info["knowledge_state"]["secrets_known_by_player"]:
+                    npc_info["knowledge_state"]["secrets_known_by_player"].append(secret)
+
+        # NPC 详细变化
+        npc_changes = ai_response.get("consequences", {}).get("npc_changes", {})
+        for npc_name, changes in npc_changes.items():
+            if npc_name in self.state.npcs:
+                self.state.npcs[npc_name].update(changes)
+
+        # 标志
+        flags_set = ai_response.get("flags_set", {})
+        for flag, value in flags_set.items():
+            self.state.set_story_flag(flag, value)
+
+        # 结局
+        ending_triggered = ai_response.get("ending_triggered", False)
+        if ending_triggered:
+            self.state.ending_triggered = True
+            self.state.ending_type = ai_response.get("ending_type", "")
+
+        # 记录历史（legacy）
+        narrative = ai_response.get("narrative", "")
+        self.state.add_history(player_input, narrative, ai_response.get("consequences", {}))
+
+        # 记录 session_history（富结构）
+        session_idx = len(self.state.session_history) - 1
+        if session_idx < 0 or self.state.session_history[session_idx].get("game_time_end"):
+            session_idx = self.state.add_session(game_time_start=datetime.now().isoformat(), scene_summary=self.state.current_scene)
+        self.state.add_session_entry(
+            session_idx=session_idx,
+            entry_type="player_action",
+            timestamp=datetime.now().isoformat(),
+            content=f"{player_input} -> {narrative[:200]}"
+        )
+
+        return {
+            "turn": self.state.turn_count,
+            "turn_before": turn_before,
+            "player_input": player_input,
+            "narrative": narrative,
+            "ending_triggered": self.state.ending_triggered,
+            "ending_type": self.state.ending_type
+        }
+
+    def list_saves(self) -> List[Dict]:
+        """列出所有存档"""
+        saves = []
+        if not os.path.exists(self.save_dir):
+            return saves
+        for filename in os.listdir(self.save_dir):
+            if filename.endswith(".json"):
+                save_id = filename[:-5]
+                filepath = os.path.join(self.save_dir, filename)
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    saves.append({
+                        "id": save_id,
+                        "world": data.get("world_setting", ""),
+                        "turn": data.get("turn_count", 0),
+                        "last_saved": data.get("metadata", {}).get("last_saved", "")
+                    })
+                except Exception:
+                    saves.append({"id": save_id, "world": "", "turn": 0, "last_saved": ""})
+        return saves
+
+    def get_ending_prompt(self) -> str:
+        """生成结局Prompt"""
+        history_text = self.state.get_history_for_ai()
+        return f"""基于以下游戏历程，生成最终结局。
+
+【世界观】
+{self.state.world_setting}
+
+【玩家】
+{self.state.player.get('name', '')} - {self.state.player.get('role', '')}
+
+【游戏历程】
+{history_text}
+
+【结局要求】
+1. 根据玩家选择和状态决定结局走向
+2. 结局类型可包括: 胜利结局 / 悲剧结局 / 开放式结局 / 隐藏结局
+3. 描述应包含情感张力和主题呼应
+4. 说明触发此结局的关键原因
+
+【输出格式】
+{{
+  "ending_type": "结局类型",
+  "ending_title": "结局标题",
+  "narrative": "结局描述（200-400字）",
+  "key_reasons": ["原因1", "原因2"]
+}}
+"""
+
     def get_current_state(self) -> Dict:
         """获取当前状态"""
         return {
