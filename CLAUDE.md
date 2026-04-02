@@ -4,68 +4,166 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Worldline Choice (世界线·抉择) is an AI-driven interactive narrative game engine (v3.3.2). It is a pure-Python project with no external dependencies.
+Worldline Choice (世界线·抉择) is an AI-driven interactive narrative game engine.
+
+**Current Version**: 4.0.0 - LLM驱动 + d20检定混合架构
+
+This is a pure-Python project with no external dependencies.
 
 ## Common Commands
 
-- **Run tests**: `python3 test_engine.py`
-- **Start a new game via CLI**: `python3 worldline_engine.py --new "赛博侦探" "黑客" "V"`
-- **Load a save via CLI**: `python3 worldline_engine.py --load <save_id>`
-- **Run dice check**: `python3 dice_roller.py <attribute_value> <dc> [attribute_name] [context]`
-- **Run game engine with a save file**: `python3 game_engine.py /path/to/save.json`
+- **Run legacy tests**: `python3 test_engine.py`
+- **Run new skill tests**: `python3 test_llm_skill.py`
+- **Start CLI mode**: `python3 worldline_skill.py`
+- **Test OpenClaw adapter**: `python3 openclaw_adapter.py`
 
-## High-Level Architecture
+## Architecture (v4.0.0 - LLM Driven)
 
-### Engine Design
+### Core Design Philosophy
 
-The codebase uses a single engine implementation:
+**Separation of Concerns**:
+1. **LLM** handles: Intent understanding, DC assessment, narrative generation
+2. **d20 engine** handles: Objective success/failure determination
+3. **Game engine** handles: State management, rule enforcement
 
-**`worldline_engine.py`** — v3.3.2 monolithic engine containing:
-- `GameState` — Manages player, NPCs, flags, history, milestones, and difficulty bias. Now includes rich structured fields for compatibility with `save_manager.py` schema.
-- `UniversalChallengeEngine` — Parses actions, calculates DC, executes d20 checks, detects narrative cheese, and handles tactical multi-step evaluation with v3.3.2 anti-abuse mechanics.
-- `WorldlineEngine` — High-level wrapper that initializes worlds, generates AI prompts, processes actions, and manages save/load.
+This architecture eliminates hardcoded keyword matching while maintaining objective game mechanics.
 
-**`save_manager.py`** — Standalone save format manager:
-- `WorldlineSaveManager` manages a structured JSON save format with `metadata`, `world_state`, `player` (attributes include auto-computed `modifier`), `session_history`, `npc_database` (each NPC has a `relationship_matrix.towards_player` with dimensions like `trust`, `respect`, `fear`), `active_quests`, `inventory`, and `story_flags`.
-- `worldline_engine.py` now embeds this schema internally; saves are compatible with both systems.
+### File Structure
+
+**`worldline_skill.py`** — Core skill implementation:
+- `WorldlineSkill` — Main game controller
+- `D20Engine` — Pure code dice rolling (no LLM involvement)
+- `LLMDriver` — Abstract interface for LLM calls
+- `GameState` — Simplified state management
+
+**`openclaw_adapter.py`** — OpenClaw integration:
+- `OpenClawAdapter` — Wraps skill for OpenClaw runtime
+- `create_skill()` — Factory function for OpenClaw
+- Tool definitions for OpenClaw function calling
+
+**`skill.json`** — OpenClaw skill manifest with tool schemas
+
+**Legacy files** (maintained for backward compatibility):
+- `worldline_engine.py` — v3.3.2 legacy engine
+- `save_manager.py` — Standalone save manager
+- `test_engine.py` — Legacy tests
+
+### Game Flow
+
+```
+Player Input
+    ↓
+LLM Analysis → ActionAnalysis (intent, DC, attribute)
+    ↓
+Pre-condition Check (items, knowledge)
+    ↓
+d20 Roll → CheckResult (objective success/failure)
+    ↓
+LLM Narrative Generation (based on dice result)
+    ↓
+Apply Consequences → Update State
+```
+
+### Key Constraint: LLM Cannot Override Dice
+
+The LLM is explicitly prompted to:
+- Analyze intent and suggest DC **before** rolling
+- Generate narrative **only after** seeing the dice result
+- Never "adjust" a failure into success narratively
 
 ### d20 Check System
 
 - Formula: `d20 + (attribute - 10) // 2 >= DC`
 - Result degrees: 大成功 / 成功 / 勉强成功 / 勉强失败 / 失败 / 大失败
 - Natural 20 = critical success; natural 1 = critical failure
-- DC modifiers from previous results: 大成功(-5) / 成功(-3) / 勉强成功(-1) / 失败(+5) / 大失败(+5)
+- No DC modifiers from previous results (simplified from v3.3.2)
 
-### Tactical Multi-Step System (`worldline_engine.py`)
+### Attributes
 
-`UniversalChallengeEngine` detects and evaluates multi-step tactical plans (e.g. "1. 派100人偷袭粮草，2. 主力诈败诱敌，3. 合围击杀"). Key behaviors:
+Six universal attributes used across all world settings:
+- `FORCE` — Combat, physical power
+- `MIND` — Intellect, technology, magic
+- `INFLUENCE` — Social, persuasion, leadership
+- `REFLEX` — Stealth, agility, reaction
+- `RESILIENCE` — Constitution, willpower
+- `LUCK` — Fortune, coincidence
 
-- **Parsing priority**: number markers (`1.`, `1、`, `1)`) > comprehensive patterns > step markers > connectors.
-- **Composite steps**: Actions sharing the same number marker execute simultaneously (each sub-action gets DC+2 and is checked independently).
-- **Step dependencies**: Automatically established based on tactical purpose (e.g. "诱敌" depends on "埋伏").
-- **Critical steps**: Purposes like `诱敌`, `偷袭`, `总攻`, `合围` are marked critical; failure can abort the entire plan.
+### Running Modes
 
-### Anti-Abuse Mechanics (v3.3.2)
+**1. CLI Mode** (`python3 worldline_skill.py`):
+```python
+skill = WorldlineSkill()
+skill.start_game("武侠", "剑客", "李逍遥")
+result = skill.process_turn("我尝试与店主交谈")
+```
 
-When modifying or extending the tactical system, these three rules must be preserved:
+**2. OpenClaw Mode**:
+```python
+from openclaw_adapter import create_skill
+adapter = create_skill(openclaw_llm_call)
+adapter.start_game("赛博朋克", "黑客", "V")
+```
 
-1. **Marginal success downgrade**: Marginal success only reduces subsequent DC by 1 (not 3).
-2. **Command chain overload**: For step 4 and beyond, each step adds +1 DC to itself and all following steps.
-3. **Info leak**: Any critical failure or natural 1 triggers an info leak. Each leak permanently adds +2 DC to all subsequent steps.
+**3. Hybrid Mode** (LLM for analysis, code for dice):
+```python
+# LLM analyzes intent
+analysis = llm.analyze_action("hack the system", state)
 
-### Narrative Cheese Detection
+# Code executes dice
+result = D20Engine.execute_check(
+    attribute_value=state.player['attributes']['MIND'],
+    dc=analysis.base_dc
+)
 
-`UniversalChallengeEngine` blocks three categories of player input:
+# LLM generates narrative
+narrative = llm.generate_narrative(action, analysis.intention, result, world)
+```
 
-- **Fabricated resources** — e.g. suddenly claiming helpers or items that don’t exist in `state.npcs`, `player.items`, or `player.tags`.
-- **Declared results** — e.g. "我一剑秒杀了他" (directly stating an outcome).
-- **New abilities** — e.g. "突然领悟绝世剑法" unless the player already has the corresponding tag/secret.
+### Save Format
 
-### Save Manager Schema (`save_manager.py`)
+Simplified v4.0.0 format:
+```json
+{
+  "version": "4.0.0-llm-driven",
+  "world_setting": "武侠",
+  "player": {
+    "name": "李逍遥",
+    "attributes": {"FORCE": 12, "MIND": 14, ...},
+    "items": ["长剑", "干粮"]
+  },
+  "history": [...],
+  "turn_count": 15,
+  "flags": {"met_master": true}
+}
+```
 
-When working with saves programmatically, note these structural details:
+### Testing
 
-- `player.attributes` maps attribute names to `{"value": int, "modifier": (value-10)//2}`.
-- `player.resources` maps resource names to `{"type": str, "value": Any, "unit": str}`.
-- NPC relationships live under `npc_database[<id>].relationship_matrix.towards_player`, where each dimension is `{"value": int, "max": int, "trend": str}`.
-- `session_history` entries have a fixed schema with `session_id`, `entries`, `session_outcome`, etc.
+- `test_llm_skill.py` — Tests for new LLM-driven architecture
+- `test_engine.py` — Legacy tests for backward compatibility
+
+Key test scenarios:
+- d20 randomness and distribution
+- LLM analysis (with mock)
+- State serialization
+- Multi-world setting compatibility
+- LLM/dice separation (verifying dice results are objective)
+
+### Migration from v3.x
+
+v3.x saves can be loaded but will be converted to v4 format:
+- Rich fields (npc_database, session_history) flattened
+- Complex tactical checks simplified
+- Focus on single-action turns
+
+### Extending
+
+To add new world setting support:
+1. No code changes needed (LLM understands any setting)
+2. Update `world_setting` parameter in `start_game()`
+3. LLM automatically adapts DC assessment and narrative style
+
+To customize mechanics:
+1. Modify `LLMDriver._build_analysis_prompt()` for DC logic
+2. Modify `D20Engine.execute_check()` for dice mechanics
+3. State management in `GameState`

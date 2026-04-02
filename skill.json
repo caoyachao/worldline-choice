@@ -1,0 +1,153 @@
+{
+  "name": "worldline-choice",
+  "version": "4.0.0",
+  "description": "AI驱动的互动叙事游戏引擎，支持LLM驱动的意图识别和d20客观检定",
+  "author": "Worldline Team",
+  "entry": "worldline_skill.py",
+  "runtime": "python3",
+  "tools": [
+    {
+      "name": "start_game",
+      "description": "开始一个新的Worldline Choice游戏会话",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "world_setting": {
+            "type": "string",
+            "description": "游戏世界观设定，例如：武侠、赛博朋克、克苏鲁、现代都市等"
+          },
+          "player_role": {
+            "type": "string",
+            "description": "玩家角色类型，例如：剑客、黑客、侦探、法师等"
+          },
+          "player_name": {
+            "type": "string",
+            "description": "玩家角色姓名"
+          },
+          "world_description": {
+            "type": "string",
+            "description": "可选的世界观详细描述"
+          }
+        },
+        "required": ["world_setting", "player_role", "player_name"]
+      }
+    },
+    {
+      "name": "process_turn",
+      "description": "处理玩家的一个游戏回合。分析意图、执行d20检定、生成叙事",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "player_input": {
+            "type": "string",
+            "description": "玩家的自然语言行动描述"
+          }
+        },
+        "required": ["player_input"]
+      }
+    },
+    {
+      "name": "analyze_action",
+      "description": "分析玩家行动的意图、难度和可能后果（不执行检定）",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "玩家行动描述"
+          }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "execute_check",
+      "description": "执行d20检定（客观判定，不涉及LLM）",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "attribute": {
+            "type": "string",
+            "enum": ["FORCE", "MIND", "INFLUENCE", "REFLEX", "RESILIENCE", "LUCK"],
+            "description": "检定时使用的属性"
+          },
+          "dc": {
+            "type": "integer",
+            "description": "难度等级（5-25）"
+          },
+          "advantage": {
+            "type": "boolean",
+            "description": "是否有优势"
+          },
+          "disadvantage": {
+            "type": "boolean",
+            "description": "是否有劣势"
+          }
+        },
+        "required": ["attribute", "dc"]
+      }
+    },
+    {
+      "name": "generate_narrative",
+      "description": "基于骰子结果生成叙事描述",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "原始行动描述"
+          },
+          "intention": {
+            "type": "string",
+            "description": "行动意图"
+          },
+          "check_result": {
+            "type": "object",
+            "description": "d20检定结果"
+          },
+          "world_setting": {
+            "type": "string",
+            "description": "世界观"
+          }
+        },
+        "required": ["action", "intention", "check_result", "world_setting"]
+      }
+    },
+    {
+      "name": "save_game",
+      "description": "保存当前游戏状态",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "save_id": {
+            "type": "string",
+            "description": "存档标识"
+          }
+        },
+        "required": ["save_id"]
+      }
+    },
+    {
+      "name": "load_game",
+      "description": "加载游戏存档",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "save_id": {
+            "type": "string",
+            "description": "存档标识"
+          }
+        },
+        "required": ["save_id"]
+      }
+    },
+    {
+      "name": "get_game_state",
+      "description": "获取当前游戏状态摘要",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ]
+}
