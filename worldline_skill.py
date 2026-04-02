@@ -82,6 +82,44 @@ class NarrativeContext:
         }
 
 
+@dataclass
+class TurnOption:
+    """单个回合选项"""
+    letter: str                 # A/B/C/D/E
+    description: str            # 选项描述（展示给玩家）
+    action: str                 # 实际执行的行动（传给引擎）
+    dc_hint: Optional[int] = None  # 可选的难度提示（用于UI显示）
+    attr_hint: Optional[str] = None  # 可选的属性提示
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+
+@dataclass
+class TurnOptions:
+    """回合选项集合 (ABCD预定义 + E自由)"""
+    options: List[TurnOption]   # A/B/C/D选项
+    free_text: TurnOption       # E选项（自由输入）
+    context: str                # 当前情境描述
+
+    def to_dict(self) -> Dict:
+        return {
+            "options": [opt.to_dict() for opt in self.options],
+            "free_text": self.free_text.to_dict(),
+            "context": self.context
+        }
+
+    def get_option(self, letter: str) -> Optional[TurnOption]:
+        """获取指定字母的选项"""
+        letter = letter.upper()
+        if letter == "E":
+            return self.free_text
+        for opt in self.options:
+            if opt.letter == letter:
+                return opt
+        return None
+
+
 # ============ 纯d20检定系统（客观判定） ============
 
 class D20Engine:
@@ -300,6 +338,44 @@ class LLMDriver:
 
         return ActionAnalysis(**result)
 
+    def generate_options(
+        self,
+        game_state: GameState,
+        previous_result: Optional[Dict] = None
+    ) -> TurnOptions:
+        """
+        生成本回合的ABCD预定义选项 + E自由选项
+
+        Args:
+            game_state: 当前游戏状态
+            previous_result: 上一回合的结果（如果有）
+        """
+        prompt = self._build_options_prompt(game_state, previous_result)
+
+        if self.callback:
+            result = self.callback(prompt, "json")
+        else:
+            result = self._default_options(game_state)
+
+        # 解析选项
+        options = []
+        for opt_data in result.get("options", []):
+            options.append(TurnOption(**opt_data))
+
+        free_text = TurnOption(
+            letter="E",
+            description=result.get("free_text", {}).get("description", "自定义行动..."),
+            action="__FREE_TEXT__",  # 特殊标记表示需要玩家输入
+            dc_hint=None,
+            attr_hint=None
+        )
+
+        return TurnOptions(
+            options=options,
+            free_text=free_text,
+            context=result.get("context", "请选择你的行动：")
+        )
+
     def generate_narrative(
         self,
         context: NarrativeContext
@@ -348,6 +424,86 @@ class LLMDriver:
 2. 不要给玩家建议（"你应该..."）
 3. 基于世界观判断什么是合理的
 4. 如果玩家声明了不存在的能力/物品，在分析中指出"但玩家目前不具备"
+"""
+
+    def _build_options_prompt(self, state: GameState, previous_result: Optional[Dict]) -> str:
+        """构建回合选项生成Prompt"""
+        prev_narrative = ""
+        if previous_result:
+            prev_narrative = f"""
+【上一回合结果】
+{previous_result.get('narrative', '无')}
+
+上一回合检定: {previous_result.get('check', {}).get('degree', '未知')}
+"""
+
+        return f"""你是一个游戏主持人，为玩家提供有意义的行动选择。
+
+【当前游戏状态】
+世界观: {state.world_setting}
+场景: {state.current_scene}
+玩家: {state.player['name']} ({state.player['role']})
+属性: {json.dumps(state.player['attributes'], ensure_ascii=False)}
+持有物品: {', '.join(state.player['items']) or '无'}
+当前回合: {state.turn_count + 1}
+{prev_narrative}
+
+【你的任务】
+基于当前情境，生成4个预定义选项(A/B/C/D)和1个自由选项(E)。
+
+输出JSON格式:
+{{
+  "context": "当前情境的简短描述（1-2句话）",
+  "options": [
+    {{
+      "letter": "A",
+      "description": "选项描述（15-20字，展示给玩家看的）",
+      "action": "实际执行的行动（详细描述，传给引擎的）",
+      "dc_hint": 12,
+      "attr_hint": "MIND"
+    }},
+    {{
+      "letter": "B",
+      "description": "...",
+      "action": "...",
+      "dc_hint": 15,
+      "attr_hint": "FORCE"
+    }},
+    {{
+      "letter": "C",
+      "description": "...",
+      "action": "...",
+      "dc_hint": 10,
+      "attr_hint": "INFLUENCE"
+    }},
+    {{
+      "letter": "D",
+      "description": "...",
+      "action": "...",
+      "dc_hint": 18,
+      "attr_hint": "REFLEX"
+    }}
+  ],
+  "free_text": {{
+    "description": "自定义行动（输入你想做的任何事情）"
+  }}
+}}
+
+【选项设计原则】
+1. **多样性**: A/B/C/D应该代表不同的解决思路（如：直接/迂回/社交/观察）
+2. **难度梯度**: 可以有不同DC（简单10/普通15/困难18）
+3. **属性多样**: 涉及不同属性（FORCE/MIND/INFLUENCE/REFLEX）
+4. **情境相关**: 选项必须基于当前场景，不能是通用选项
+5. **有意义的选择**: 每个选项应该导向不同的结果
+6. **风险与收益**: 高难度选项可能有高收益，低风险选项收益也低
+
+【示例】
+场景：守卫挡住入口
+A- 战斗: "强行突破" (FORCE, DC15)
+B- 潜行: "寻找侧门潜入" (REFLEX, DC12)
+C- 社交: "尝试贿赂守卫" (INFLUENCE, DC14)
+D- 观察: "侦察守卫巡逻规律" (MIND, DC10)
+E- 自由: "自定义行动"
 """
 
     def _build_narrative_prompt(self, ctx: NarrativeContext) -> str:
@@ -451,6 +607,45 @@ class LLMDriver:
                 "required_items": [],
                 "required_knowledge": []
             }
+
+    def _default_options(self, state: GameState) -> Dict:
+        """默认选项（用于无LLM时的回退）"""
+        return {
+            "context": f"你在{state.current_scene}，需要做出选择：",
+            "options": [
+                {
+                    "letter": "A",
+                    "description": "直接行动（力量）",
+                    "action": "采取直接了当的方式解决问题",
+                    "dc_hint": 15,
+                    "attr_hint": "FORCE"
+                },
+                {
+                    "letter": "B",
+                    "description": "谨慎观察（智力）",
+                    "action": "仔细观察情况，寻找最佳时机",
+                    "dc_hint": 12,
+                    "attr_hint": "MIND"
+                },
+                {
+                    "letter": "C",
+                    "description": "社交交涉（魅力）",
+                    "action": "尝试通过对话或交涉解决问题",
+                    "dc_hint": 14,
+                    "attr_hint": "INFLUENCE"
+                },
+                {
+                    "letter": "D",
+                    "description": "灵活应变（敏捷）",
+                    "action": "采取灵活迂回的方式达成目标",
+                    "dc_hint": 13,
+                    "attr_hint": "REFLEX"
+                }
+            ],
+            "free_text": {
+                "description": "自定义行动（描述你想做的其他事情）"
+            }
+        }
 
     def _default_narrative(self, ctx: NarrativeContext) -> Dict:
         """默认叙事（回退）"""
@@ -596,6 +791,57 @@ class WorldlineSkill:
 
         return turn_result
 
+    def generate_turn_options(
+        self,
+        previous_result: Optional[Dict] = None
+    ) -> TurnOptions:
+        """
+        生成本回合的ABCD预定义选项 + E自由选项
+
+        Args:
+            previous_result: 上一回合的结果（用于上下文）
+
+        Returns:
+            TurnOptions对象，包含A/B/C/D选项和E自由选项
+        """
+        return self.llm.generate_options(self.state, previous_result)
+
+    def process_option(
+        self,
+        options: TurnOptions,
+        choice: str,
+        free_text: Optional[str] = None
+    ) -> Dict:
+        """
+        处理玩家选择的选项
+
+        Args:
+            options: 本回合的选项集合
+            choice: 玩家选择（A/B/C/D/E）
+            free_text: 如果选E，玩家的自由输入
+
+        Returns:
+            回合结果（同process_turn）
+        """
+        choice = choice.upper().strip()
+
+        if choice == "E":
+            # 自由选项
+            if not free_text:
+                return {"error": "选择E时需要提供自由输入"}
+            action = free_text
+        elif choice in ["A", "B", "C", "D"]:
+            # 预定义选项
+            option = options.get_option(choice)
+            if not option:
+                return {"error": f"无效的选项: {choice}"}
+            action = option.action
+        else:
+            return {"error": f"无效的选择: {choice}，请选择A/B/C/D/E"}
+
+        # 执行回合
+        return self.process_turn(action)
+
     def _apply_consequences(self, consequences: Dict):
         """应用状态变更"""
         # 属性变化
@@ -658,7 +904,7 @@ class WorldlineSkill:
 # ============ CLI接口 ============
 
 def cli_main():
-    """CLI模式入口"""
+    """CLI模式入口 - 带ABCDE选项"""
     print("="*60)
     print("Worldline Choice - LLM驱动 + d20检定")
     print("="*60)
@@ -675,29 +921,60 @@ def cli_main():
     print(f"\n游戏开始: {result['world']}")
     print(f"属性: {result['player']['attributes']}")
 
+    previous_result = None
+
     # 游戏循环
     while not skill.state.ending_triggered:
-        print(f"\n{'='*40}")
+        print(f"\n{'='*50}")
         print(f"场景: {skill.state.current_scene}")
         print(f"回合 {skill.state.turn_count + 1}")
-        print("-"*40)
+        print("-"*50)
 
-        action = input("你的行动: ").strip()
-        if not action:
-            continue
+        # 生成选项
+        print("\n正在生成本回合选项...")
+        options = skill.generate_turn_options(previous_result)
 
-        if action.lower() in ["save", "保存"]:
+        # 显示情境
+        print(f"\n【情境】{options.context}")
+
+        # 显示选项
+        print("\n【可选行动】")
+        for opt in options.options:
+            attr_str = f"[{opt.attr_hint}]" if opt.attr_hint else ""
+            dc_str = f"(DC{opt.dc_hint})" if opt.dc_hint else ""
+            print(f"  {opt.letter}. {opt.description} {attr_str} {dc_str}")
+        print(f"  E. {options.free_text.description}")
+
+        # 获取玩家选择
+        print("-"*50)
+        choice = input("你的选择 (A/B/C/D/E): ").strip().upper()
+
+        if choice == "E":
+            free_input = input("描述你的行动: ").strip()
+            if not free_input:
+                print("[错误] 选择E时需要描述行动")
+                continue
+        elif choice in ["A", "B", "C", "D"]:
+            option = options.get_option(choice)
+            if not option:
+                print(f"[错误] 无效选项: {choice}")
+                continue
+            free_input = None
+            print(f"你选择了: {option.description}")
+        elif choice.lower() in ["save", "保存"]:
             save_id = input("存档ID: ") or "auto"
             path = skill.save_game(save_id)
             print(f"已保存到: {path}")
             continue
-
-        if action.lower() in ["quit", "退出"]:
+        elif choice.lower() in ["quit", "退出"]:
             break
+        else:
+            print(f"[错误] 无效输入: {choice}，请输入A/B/C/D/E")
+            continue
 
         # 处理回合
         print("\n处理中...")
-        result = skill.process_turn(action)
+        result = skill.process_option(options, choice, free_input)
 
         if "error" in result:
             print(f"[错误] {result['error']}")
@@ -710,8 +987,11 @@ def cli_main():
         print(f"\n【剧情】")
         print(result['narrative'])
 
+        # 保存结果供下回合使用
+        previous_result = result
+
         if result.get('ending_triggered'):
-            print(f"\n{'='*40}")
+            print(f"\n{'='*50}")
             print(f"游戏结束: {result.get('ending_type', '结局')}")
             break
 

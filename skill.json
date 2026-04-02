@@ -114,6 +114,38 @@
       }
     },
     {
+      "name": "generate_turn_options",
+      "description": "生成本回合的ABCD预定义选项和E自由选项",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "previous_result": {
+            "type": "object",
+            "description": "上一回合的结果（可选）"
+          }
+        }
+      }
+    },
+    {
+      "name": "process_option",
+      "description": "处理玩家选择的选项（A/B/C/D/E）",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "choice": {
+            "type": "string",
+            "enum": ["A", "B", "C", "D", "E"],
+            "description": "玩家选择的选项"
+          },
+          "free_text": {
+            "type": "string",
+            "description": "如果选E，玩家的自由输入文本"
+          }
+        },
+        "required": ["choice"]
+      }
+    },
+    {
       "name": "save_game",
       "description": "保存当前游戏状态",
       "parameters": {

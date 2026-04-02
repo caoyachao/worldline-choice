@@ -247,6 +247,89 @@ def test_multi_world_settings():
     print("✓ 多世界观通用性测试通过\n")
 
 
+def test_turn_options():
+    """测试ABCD预定义选项 + E自由选项"""
+    print("="*60)
+    print("测试7: 回合选项系统")
+    print("="*60)
+
+    skill = WorldlineSkill()
+    skill.start_game("武侠", "剑客", "测试者")
+
+    # 测试选项生成
+    options = skill.generate_turn_options()
+    assert options is not None
+    assert len(options.options) == 4  # A/B/C/D
+
+    # 检查选项结构
+    for opt in options.options:
+        assert opt.letter in ["A", "B", "C", "D"]
+        assert opt.description
+        assert opt.action
+        print(f"  {opt.letter}. {opt.description} [{opt.attr_hint}] (DC{opt.dc_hint})")
+
+    # 检查E选项
+    assert options.free_text.letter == "E"
+    assert options.free_text.description
+    print(f"  E. {options.free_text.description}")
+
+    print("✓ 选项生成正确")
+
+    # 测试选择A选项
+    result = skill.process_option(options, "A")
+    assert "check" in result
+    assert "narrative" in result
+    print(f"✓ 选择A处理正确 (结果: {result['check']['degree']})")
+
+    # 测试选择E选项（自由输入）
+    options2 = skill.generate_turn_options()
+    result2 = skill.process_option(options2, "E", "我尝试用轻功飞上屋顶")
+    assert "check" in result2
+    assert "narrative" in result2
+    print(f"✓ 选择E（自由输入）处理正确 (结果: {result2['check']['degree']})")
+
+    # 测试无效选项
+    result3 = skill.process_option(options, "Z")
+    assert "error" in result3
+    print("✓ 无效选项处理正确")
+
+    # 测试选择E但不提供输入
+    result4 = skill.process_option(options, "E")
+    assert "error" in result4
+    print("✓ 选择E无输入时错误提示正确")
+
+    print("✓ 回合选项系统测试通过\n")
+
+
+def test_openclaw_options():
+    """测试OpenClaw适配器的选项接口"""
+    print("="*60)
+    print("测试8: OpenClaw选项接口")
+    print("="*60)
+
+    adapter = create_skill(mock_llm_call)
+    adapter.start_game("奇幻", "法师", "测试者")
+
+    # 测试生成选项
+    options_dict = adapter.generate_turn_options()
+    assert "options" in options_dict
+    assert "free_text" in options_dict
+    assert len(options_dict["options"]) == 4
+    print("✓ OpenClaw generate_turn_options 正确")
+
+    # 测试处理选项
+    result = adapter.process_option("B")
+    assert "check" in result
+    print(f"✓ OpenClaw process_option 正确 (选择B: {result['check']['degree']})")
+
+    # 测试处理E选项
+    result2 = adapter.process_option("E", "我施放火球术")
+    assert "check" in result2
+    print(f"✓ OpenClaw process_option E 正确 (结果: {result2['check']['degree']})")
+
+    print("✓ OpenClaw选项接口测试通过\n")
+
+
 def run_all_tests():
     """运行所有测试"""
     print("\n" + "="*60)
@@ -260,6 +343,8 @@ def run_all_tests():
         test_openclaw_adapter()
         test_llm_d20_separation()
         test_multi_world_settings()
+        test_turn_options()
+        test_openclaw_options()
 
         print("="*60)
         print("✓ 所有测试通过!")

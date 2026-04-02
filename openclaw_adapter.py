@@ -113,6 +113,17 @@ class OpenClawAdapter:
         llm = LLMDriver(self._llm_callback)
         return llm.generate_narrative(ctx)
 
+    def generate_turn_options(self, previous_result: Optional[Dict] = None) -> Dict:
+        """生成本回合的ABCD预定义选项 + E自由选项"""
+        options = self.skill.generate_turn_options(previous_result)
+        return options.to_dict()
+
+    def process_option(self, choice: str, free_text: Optional[str] = None) -> Dict:
+        """处理玩家选择的选项"""
+        # 先获取当前选项
+        options = self.skill.generate_turn_options()
+        return self.skill.process_option(options, choice, free_text)
+
     def save_game(self, save_id: str) -> Dict:
         """保存游戏"""
         path = self.skill.save_game(save_id)
@@ -161,14 +172,18 @@ def mock_llm_call(prompt: str, format: str) -> str:
         }, ensure_ascii=False)
 
     elif "生成叙事" in prompt or "基于骰子结果" in prompt:
-        # 从prompt中提取骰子结果
+        # 从prompt中提取骰子结果 - 精确匹配
         degree = "成功"
-        if "大成功" in prompt:
+        if "结果程度: 大成功" in prompt:
             degree = "大成功"
-        elif "失败" in prompt:
-            degree = "失败"
-        elif "大失败" in prompt:
+        elif "结果程度: 大失败" in prompt:
             degree = "大失败"
+        elif "结果程度: 勉强成功" in prompt:
+            degree = "勉强成功"
+        elif "结果程度: 勉强失败" in prompt:
+            degree = "勉强失败"
+        elif "结果程度: 失败" in prompt:
+            degree = "失败"
 
         templates = {
             "大成功": "你完美地完成了行动，效果超出预期！",
@@ -192,6 +207,45 @@ def mock_llm_call(prompt: str, format: str) -> str:
             },
             "ending_triggered": False,
             "ending_type": ""
+        }, ensure_ascii=False)
+
+    elif "生成本回合" in prompt or "预定义选项" in prompt or "回合选项" in prompt:
+        # 返回模拟选项
+        return json.dumps({
+            "context": "你面临一个选择，需要决定如何行动：",
+            "options": [
+                {
+                    "letter": "A",
+                    "description": "直接行动，使用力量",
+                    "action": "采取直接了当的方式解决问题",
+                    "dc_hint": 15,
+                    "attr_hint": "FORCE"
+                },
+                {
+                    "letter": "B",
+                    "description": "谨慎观察，寻找时机",
+                    "action": "仔细观察情况，寻找最佳时机",
+                    "dc_hint": 12,
+                    "attr_hint": "MIND"
+                },
+                {
+                    "letter": "C",
+                    "description": "尝试交涉，说服对方",
+                    "action": "尝试通过对话或交涉解决问题",
+                    "dc_hint": 14,
+                    "attr_hint": "INFLUENCE"
+                },
+                {
+                    "letter": "D",
+                    "description": "灵活迂回，从侧面突破",
+                    "action": "采取灵活迂回的方式达成目标",
+                    "dc_hint": 13,
+                    "attr_hint": "REFLEX"
+                }
+            ],
+            "free_text": {
+                "description": "自定义行动（描述你想做的其他事情）"
+            }
         }, ensure_ascii=False)
 
     return json.dumps({"content": "模拟响应"})
