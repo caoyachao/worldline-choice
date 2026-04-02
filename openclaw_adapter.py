@@ -15,14 +15,16 @@ class OpenClawAdapter:
     将WorldlineSkill封装为OpenClaw可调用的形式
     """
 
-    def __init__(self, llm_call: Callable[[str, str], str]):
+    def __init__(self, llm_call: Callable[[str, str], str], auto_save: bool = True, show_dice: bool = False):
         """
         Args:
             llm_call: OpenClaw提供的LLM调用函数
                      签名: fn(prompt: str, format: str) -> str
+            auto_save: 是否每回合自动存档（默认True）
+            show_dice: 是否显示骰子结果（默认False）
         """
         self.llm_call = llm_call
-        self.skill = WorldlineSkill(llm_callback=self._llm_callback)
+        self.skill = WorldlineSkill(llm_callback=self._llm_callback, auto_save=auto_save, show_dice=show_dice)
 
     def _llm_callback(self, prompt: str, response_format: str) -> Dict:
         """
@@ -141,15 +143,20 @@ class OpenClawAdapter:
 
 # ============ OpenClaw运行时入口 ============
 
-def create_skill(llm_call: Callable[[str, str], str]) -> OpenClawAdapter:
+def create_skill(llm_call: Callable[[str, str], str], auto_save: bool = True, show_dice: bool = False) -> OpenClawAdapter:
     """
     OpenClaw调用的工厂函数
 
     Usage:
         skill = create_skill(openclaw_llm_call)
         result = skill.process_turn("我尝试说服守卫")
+
+    Args:
+        llm_call: OpenClaw提供的LLM调用函数
+        auto_save: 是否每回合自动存档（默认True）
+        show_dice: 是否显示骰子结果（默认False，后台静默投骰）
     """
-    return OpenClawAdapter(llm_call)
+    return OpenClawAdapter(llm_call, auto_save=auto_save, show_dice=show_dice)
 
 
 # ============ 测试用模拟LLM ============
@@ -210,37 +217,37 @@ def mock_llm_call(prompt: str, format: str) -> str:
         }, ensure_ascii=False)
 
     elif "生成本回合" in prompt or "预定义选项" in prompt or "回合选项" in prompt:
-        # 返回模拟选项
+        # 返回剧情化的模拟选项
         return json.dumps({
-            "context": "你面临一个选择，需要决定如何行动：",
+            "context": "你站在岔路口，前方传来争吵声和金属碰撞的声音。空气中弥漫着紧张的气息...",
             "options": [
                 {
                     "letter": "A",
-                    "description": "直接行动，使用力量",
-                    "action": "采取直接了当的方式解决问题",
-                    "dc_hint": 15,
+                    "description": "握紧武器，大步走向声音来源",
+                    "action": "毫不畏惧地走向声音来源，准备面对任何危险",
+                    "dc_hint": 14,
                     "attr_hint": "FORCE"
                 },
                 {
                     "letter": "B",
-                    "description": "谨慎观察，寻找时机",
-                    "action": "仔细观察情况，寻找最佳时机",
+                    "description": "躲进阴影，先观察情况",
+                    "action": "悄悄躲进附近的阴影中，仔细观察声音来源和周围情况",
                     "dc_hint": 12,
-                    "attr_hint": "MIND"
+                    "attr_hint": "REFLEX"
                 },
                 {
                     "letter": "C",
-                    "description": "尝试交涉，说服对方",
-                    "action": "尝试通过对话或交涉解决问题",
-                    "dc_hint": 14,
+                    "description": "大声喊话，试图阻止冲突",
+                    "action": "朝声音方向喊话，试图制止冲突并表明自己的存在",
+                    "dc_hint": 16,
                     "attr_hint": "INFLUENCE"
                 },
                 {
                     "letter": "D",
-                    "description": "灵活迂回，从侧面突破",
-                    "action": "采取灵活迂回的方式达成目标",
+                    "description": "绕路避开，不想惹麻烦",
+                    "action": "悄悄绕行，避开声音来源，寻找其他安全的道路",
                     "dc_hint": 13,
-                    "attr_hint": "REFLEX"
+                    "attr_hint": "MIND"
                 }
             ],
             "free_text": {

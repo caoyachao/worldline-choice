@@ -98,7 +98,7 @@ def test_skill_integration():
     print("测试3: Skill集成（无LLM模式）")
     print("="*60)
 
-    skill = WorldlineSkill()
+    skill = WorldlineSkill(show_dice=True)
 
     # 测试游戏初始化
     result = skill.start_game("赛博朋克", "黑客", "V")
@@ -143,7 +143,7 @@ def test_openclaw_adapter():
     print("测试4: OpenClaw适配器")
     print("="*60)
 
-    adapter = create_skill(mock_llm_call)
+    adapter = create_skill(mock_llm_call, show_dice=True)
 
     # 测试游戏开始
     result = adapter.start_game("奇幻", "法师", "甘道夫")
@@ -193,7 +193,7 @@ def test_llm_d20_separation():
     print("测试5: LLM与d20分离验证")
     print("="*60)
 
-    adapter = create_skill(mock_llm_call)
+    adapter = create_skill(mock_llm_call, show_dice=True)
     adapter.start_game("测试世界", "测试者", "玩家")
 
     # 运行多次回合，验证：
@@ -236,7 +236,7 @@ def test_multi_world_settings():
     ]
 
     for world, role, action in worlds:
-        adapter = create_skill(mock_llm_call)
+        adapter = create_skill(mock_llm_call, show_dice=True)
         adapter.start_game(world, role, "测试者")
         turn = adapter.process_turn(action)
 
@@ -253,7 +253,7 @@ def test_turn_options():
     print("测试7: 回合选项系统")
     print("="*60)
 
-    skill = WorldlineSkill()
+    skill = WorldlineSkill(show_dice=True)
     skill.start_game("武侠", "剑客", "测试者")
 
     # 测试选项生成
@@ -307,7 +307,7 @@ def test_openclaw_options():
     print("测试8: OpenClaw选项接口")
     print("="*60)
 
-    adapter = create_skill(mock_llm_call)
+    adapter = create_skill(mock_llm_call, show_dice=True)
     adapter.start_game("奇幻", "法师", "测试者")
 
     # 测试生成选项

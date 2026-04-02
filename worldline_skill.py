@@ -489,21 +489,24 @@ class LLMDriver:
   }}
 }}
 
-【选项设计原则】
-1. **多样性**: A/B/C/D应该代表不同的解决思路（如：直接/迂回/社交/观察）
-2. **难度梯度**: 可以有不同DC（简单10/普通15/困难18）
-3. **属性多样**: 涉及不同属性（FORCE/MIND/INFLUENCE/REFLEX）
-4. **情境相关**: 选项必须基于当前场景，不能是通用选项
-5. **有意义的选择**: 每个选项应该导向不同的结果
-6. **风险与收益**: 高难度选项可能有高收益，低风险选项收益也低
+【选项设计原则 - 剧情导向】
+1. **情境沉浸**: 选项必须紧密结合当前场景的具体元素，不是通用模板
+2. **戏剧张力**: 四个选项应呈现真实的两难或多元价值观（如：道德vs效率，安全vs收益）
+3. **角色扮演**: 选项应反映不同的人物性格或行事风格（如：鲁莽/谨慎/狡诈/仁慈）
+4. **后果分化**: 每个选项应该导向明显不同的剧情分支，不只是换皮
+5. **属性自然**: 属性使用应自然融入剧情，不要为了凑属性而硬塞
+6. **难度合理**: DC应由情境复杂度决定，不是人为设置
 
-【示例】
-场景：守卫挡住入口
-A- 战斗: "强行突破" (FORCE, DC15)
-B- 潜行: "寻找侧门潜入" (REFLEX, DC12)
-C- 社交: "尝试贿赂守卫" (INFLUENCE, DC14)
-D- 观察: "侦察守卫巡逻规律" (MIND, DC10)
-E- 自由: "自定义行动"
+【剧情化选项示例 - 不要照搬】
+场景：你发现受伤的敌人倒在路边
+A- "救他，可能获得情报但也可能暴露自己" (高风险高回报，INFLUENCE)
+B- "搜刮物资后离开，不管他的死活" (安全但可能有道德代价，MIND)
+C- "给他个痛快，结束他的痛苦" (残酷但确定，FORCE)
+D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
+
+【反例 - 避免这种】
+❌ A- "用力量攻击" B- "用智力解谜" C- "用魅力说服" D- "用敏捷闪避"
+这种选项只是换了个说法的属性选择，完全没有剧情意义。
 """
 
     def _build_narrative_prompt(self, ctx: NarrativeContext) -> str:
@@ -609,39 +612,117 @@ E- 自由: "自定义行动"
             }
 
     def _default_options(self, state: GameState) -> Dict:
-        """默认选项（用于无LLM时的回退）"""
+        """默认选项（用于无LLM时的回退）- 剧情导向设计"""
+        # 基于回合数轮换不同的情境模板，展示多样化的剧情选项
+        templates = [
+            {
+                "context": f"你站在{state.current_scene}的十字路口，前方传来奇怪的声音...",
+                "options": [
+                    {
+                        "letter": "A",
+                        "description": "握紧武器，大步走向声音来源",
+                        "action": "毫不畏惧地走向声音来源，准备面对任何危险",
+                        "dc_hint": 14,
+                        "attr_hint": "FORCE"
+                    },
+                    {
+                        "letter": "B",
+                        "description": "躲进阴影，先观察情况",
+                        "action": "悄悄躲进附近的阴影中，仔细观察声音来源",
+                        "dc_hint": 12,
+                        "attr_hint": "REFLEX"
+                    },
+                    {
+                        "letter": "C",
+                        "description": "大声喊话，试图交流",
+                        "action": "朝声音方向喊话，表明自己没有敌意，试图沟通",
+                        "dc_hint": 15,
+                        "attr_hint": "INFLUENCE"
+                    },
+                    {
+                        "letter": "D",
+                        "description": "分析环境，寻找其他路径",
+                        "action": "冷静分析周围环境，寻找可以绕行的安全路径",
+                        "dc_hint": 13,
+                        "attr_hint": "MIND"
+                    }
+                ]
+            },
+            {
+                "context": f"一个陌生人拦住了你，眼神中带着试探...",
+                "options": [
+                    {
+                        "letter": "A",
+                        "description": "坦诚相待，说出真实目的",
+                        "action": "直视对方的眼睛，坦诚地说出自己的真实目的",
+                        "dc_hint": 14,
+                        "attr_hint": "INFLUENCE"
+                    },
+                    {
+                        "letter": "B",
+                        "description": "编造谎言，试探对方反应",
+                        "action": "编造一个半真半假的故事，观察对方的反应",
+                        "dc_hint": 16,
+                        "attr_hint": "MIND"
+                    },
+                    {
+                        "letter": "C",
+                        "description": "保持沉默，让对方先开口",
+                        "action": "冷冷地看着对方，一言不发，等待对方表明来意",
+                        "dc_hint": 13,
+                        "attr_hint": "LUCK"
+                    },
+                    {
+                        "letter": "D",
+                        "description": "手按剑柄，警告对方不要挡路",
+                        "action": "手按在武器上，用肢体语言表明自己不想惹事但也不怕事",
+                        "dc_hint": 15,
+                        "attr_hint": "FORCE"
+                    }
+                ]
+            },
+            {
+                "context": f"你发现了一个可疑的线索，但时间紧迫...",
+                "options": [
+                    {
+                        "letter": "A",
+                        "description": "仔细搜查，不放过任何细节",
+                        "action": "花时间仔细搜查现场，寻找所有可能的线索",
+                        "dc_hint": 12,
+                        "attr_hint": "MIND"
+                    },
+                    {
+                        "letter": "B",
+                        "description": "拿上明显的东西就走",
+                        "action": "只拿取最明显、最有价值的物品，尽快离开",
+                        "dc_hint": 14,
+                        "attr_hint": "REFLEX"
+                    },
+                    {
+                        "letter": "C",
+                        "description": "设置陷阱，以防有人跟踪",
+                        "action": "在离开前设置一个简单的警报陷阱，防止被跟踪",
+                        "dc_hint": 16,
+                        "attr_hint": "MIND"
+                    },
+                    {
+                        "letter": "D",
+                        "description": "破坏现场，不留下痕迹",
+                        "action": "故意破坏现场，让别人无法追踪你的行踪",
+                        "dc_hint": 15,
+                        "attr_hint": "FORCE"
+                    }
+                ]
+            }
+        ]
+
+        # 根据回合数选择模板
+        template_index = (state.turn_count // 3) % len(templates)
+        selected = templates[template_index]
+
         return {
-            "context": f"你在{state.current_scene}，需要做出选择：",
-            "options": [
-                {
-                    "letter": "A",
-                    "description": "直接行动（力量）",
-                    "action": "采取直接了当的方式解决问题",
-                    "dc_hint": 15,
-                    "attr_hint": "FORCE"
-                },
-                {
-                    "letter": "B",
-                    "description": "谨慎观察（智力）",
-                    "action": "仔细观察情况，寻找最佳时机",
-                    "dc_hint": 12,
-                    "attr_hint": "MIND"
-                },
-                {
-                    "letter": "C",
-                    "description": "社交交涉（魅力）",
-                    "action": "尝试通过对话或交涉解决问题",
-                    "dc_hint": 14,
-                    "attr_hint": "INFLUENCE"
-                },
-                {
-                    "letter": "D",
-                    "description": "灵活应变（敏捷）",
-                    "action": "采取灵活迂回的方式达成目标",
-                    "dc_hint": 13,
-                    "attr_hint": "REFLEX"
-                }
-            ],
+            "context": selected["context"],
+            "options": selected["options"],
             "free_text": {
                 "description": "自定义行动（描述你想做的其他事情）"
             }
@@ -684,11 +765,19 @@ class WorldlineSkill:
     LLM驱动 + d20检定的混合架构
     """
 
-    def __init__(self, llm_callback: Optional[Callable] = None):
+    def __init__(self, llm_callback: Optional[Callable] = None, auto_save: bool = True, show_dice: bool = False):
+        """
+        Args:
+            llm_callback: LLM调用回调函数
+            auto_save: 是否每回合自动存档（默认True）
+            show_dice: 是否显示骰子结果（默认False，后台静默投骰）
+        """
         self.state = GameState()
         self.d20 = D20Engine()
         self.llm = LLMDriver(llm_callback)
         self.save_dir = "./saves"
+        self.auto_save = auto_save
+        self.show_dice = show_dice
         os.makedirs(self.save_dir, exist_ok=True)
 
     def start_game(
@@ -776,11 +865,18 @@ class WorldlineSkill:
             "turn": self.state.turn_count + 1,
             "action": player_input,
             "intention": analysis.intention,
-            "check": check_result.to_dict(),
             "narrative": narrative_result.get("narrative", ""),
             "consequences": narrative_result.get("consequences", {}),
             "ending_triggered": narrative_result.get("ending_triggered", False)
         }
+
+        # 根据配置决定是否显示骰子结果
+        if self.show_dice:
+            turn_result["check"] = check_result.to_dict()
+        else:
+            # 不显示详细骰子结果，只显示程度
+            turn_result["degree"] = check_result.degree
+            turn_result["success"] = check_result.success
 
         self.state.add_history(player_input, turn_result)
 
@@ -788,6 +884,10 @@ class WorldlineSkill:
         if narrative_result.get("ending_triggered"):
             self.state.ending_triggered = True
             self.state.ending_type = narrative_result.get("ending_type", "")
+
+        # 自动存档
+        if self.auto_save:
+            self.save_game("auto")
 
         return turn_result
 
@@ -981,9 +1081,14 @@ def cli_main():
             continue
 
         # 显示结果
-        check = result['check']
-        print(f"\n【检定】{check['degree']}")
-        print(f"骰子: {check['roll']} + 修正{check['modifier']:+d} = {check['total']} vs DC{check['dc']}")
+        if skill.show_dice:
+            # 显示详细骰子结果
+            check = result['check']
+            print(f"\n【检定】{check['degree']}")
+            print(f"骰子: {check['roll']} + 修正{check['modifier']:+d} = {check['total']} vs DC{check['dc']}")
+        else:
+            # 只显示结果程度，不显示骰子细节
+            print(f"\n【结果】{result.get('degree', '未知')}")
         print(f"\n【剧情】")
         print(result['narrative'])
 
