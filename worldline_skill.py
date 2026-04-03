@@ -197,7 +197,7 @@ class D20Engine:
 class GameState:
     """精简版游戏状态，专注核心数据"""
 
-    VERSION = "4.0.0-llm-driven"
+    VERSION = "4.1.0"
 
     def __init__(self):
         # 基础信息
