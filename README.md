@@ -11,7 +11,7 @@ description: AI驱动互动叙事游戏引擎 - 在无限世界线中，你的�
 
 > 对你的智能体说：
 > 
-> “安装skill https://github.com/caoyachao/worldline-choice"
+> “安装skill： https://github.com/caoyachao/worldline-choice"
 > 
 > "开始游戏"
 
