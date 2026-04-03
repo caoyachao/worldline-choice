@@ -7,7 +7,7 @@ description: AI驱动互动叙事游戏引擎 - 在无限世界线中，你的�
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-v4.1.0-green.svg)](https://github.com/caoyachao/worldline-choice)
+[![Version](https://img.shields.io/badge/version-v4.1.1-green.svg)](https://github.com/caoyachao/worldline-choice)
 
 > 对智能体说：
 > 
