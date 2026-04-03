@@ -9,13 +9,13 @@ description: AI驱动互动叙事游戏引擎 - 在无限世界线中，你的�
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-v4.1.0-green.svg)](https://github.com/caoyachao/worldline-choice)
 
-> 对你的智能体说：
+> 对智能体说：
 > 
 > “安装skill： https://github.com/caoyachao/worldline-choice"
 > 
 > "开始游戏"
 
-**Worldline Choice** 是一个AI驱动的开放式互动叙事引擎。玩家可以在科幻、奇幻、历史、现代都市等各种世界中扮演关键角色，也可以创造全新的原创世界。所有剧情由AI实时生成，**没有固定剧本**——你的每个选择都在创造一条独一无二的世界线。
+**Worldline Choice** 是一个AI驱动的开放式互动叙事引擎。可以在科幻、奇幻、历史、现代都市等各种世界中扮演关键角色，也可以创造全新的原创世界。所有剧情由AI实时生成，**没有固定剧本**每个选择都在创造一条独一无二的世界线。
 
 ---
 
