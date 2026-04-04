@@ -1,9 +1,9 @@
 ---
 name: worldline-choice
-description: AI驱动互动叙事游戏引擎 v4.1.1 - 世界观扩展版。LLM驱动+d20检定混合架构，支持任意世界观，ABCD预定义选项+E自由选项，简化单回合动作系统。
+description: AI驱动互动叙事游戏引擎 v4.2.0 - 兼容入口版。LLM驱动+d20检定混合架构，默认透明暴露掷骰结果，兼容旧版API与存档迁移，支持任意世界观，ABCD预定义选项+E自由选项，简化单回合动作系统。
 ---
 
-# Worldline Choice v4.1.1 - 世界观扩展版
+# Worldline Choice v4.2.0 - 兼容入口版
 
 ## 简介
 
@@ -15,6 +15,11 @@ Worldline Choice 是一个**真正具有挑战性**的AI驱动互动叙事游戏
 - **代码** 负责：状态管理、规则执行
 
 **v4.1.1 世界观扩展**：支持任意世界观设定，LLM自动适配DC评估和叙事风格。
+
+**v4.2.0 兼容入口版**：
+- `worldline_engine.py` 重写为 `worldline_skill.py` 的兼容薄层，默认 `show_dice=True`，d20 检定结果对 agent/CLI 完全透明
+- 内置 `_migrate_legacy_save()`，v3.x 旧存档可自动迁移到 v4.x 扁平结构
+- 保留旧版 API 签名（`get_system_prompt`、`process_action`、`load_game` 等），旧调用方零改动升级
 
 ---
 
@@ -381,10 +386,21 @@ WorldlineEngine (v3.x)
 | `worldline_skill.py` | v4.0.0+ | 核心技能实现，LLM+d20混合架构 |
 | `openclaw_adapter.py` | v4.0.0+ | OpenClaw集成适配器 |
 | `skill.json` | v4.0.0+ | OpenClaw技能清单 |
-| `worldline_engine.py` | v3.x | 遗留引擎（纯代码驱动） |
+| `worldline_engine.py` | v4.2.0+ | 兼容入口薄层，默认 show_dice=True，向后兼容旧版 API |
 | `save_manager.py` | v3.x | 独立存档管理器 |
 
 ## 版本历史
+
+### v4.2.0 (2026-04-04) - 兼容入口版
+- **兼容入口重写 (`worldline_engine.py`)**
+  - 重写为 `worldline_skill.py` 的轻量薄层，统一代理全部核心实现
+  - 默认 `show_dice=True`，d20 检定结果对 agent / CLI 完全透明
+- **旧版存档自动迁移**
+  - 新增 `_migrate_legacy_save()`，v3.x 富结构存档自动转为 v4.x 扁平结构
+  - 中文属性名自动映射到六项通用维度（FORCE/MIND/INFLUENCE 等）
+- **旧 API 零改动兼容**
+  - 保留 `get_system_prompt`、`process_action`、`load_game` 等旧签名
+  - 旧调用方可直接升级到 v4.2.0 而无需修改调用代码
 
 ### v4.1.1 (2026-04-03) - 世界观扩展版
 - **任意世界观支持**
