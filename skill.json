@@ -1,7 +1,7 @@
 {
   "name": "worldline-choice",
   "version": "4.2.1",
-  "description": "AI驱动的互动叙事游戏引擎，支持LLM驱动的意图识别和d20客观检定",
+  "description": "AI驱动的互动叙事游戏引擎 v4.2.1。作为主持人(agent)，你与玩家共同创造开放式故事：初始化游戏→生成场景和ABCD+E选项→接收玩家选择→调用引擎执行d20检定→根据骰子结果讲述剧情→更新状态。默认透明暴露掷骰结果，支持任意世界观与旧版存档自动迁移。",
   "author": "Worldline Team",
   "entry": "worldline_skill.py",
   "runtime": "python3",
