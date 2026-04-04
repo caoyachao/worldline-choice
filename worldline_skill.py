@@ -197,7 +197,7 @@ class D20Engine:
 class GameState:
     """精简版游戏状态，专注核心数据"""
 
-    VERSION = "4.2.1"
+    VERSION = "4.3.0"
 
     def __init__(self):
         # 基础信息
@@ -229,6 +229,11 @@ class GameState:
         self.history: List[Dict] = []
         self.turn_count: int = 0
         self.flags: Dict[str, Any] = {}
+
+        # 战术增强系统（v4.3.0）：前置准备 + NPC协助 + 场景互动
+        self.active_benefits: List[Dict] = []    # 当前可用的战术加成
+        self.scene_objects: List[Dict] = []      # 场景中的可互动物体
+        self.npc_assist_log: List[Dict] = []     # NPC协助历史记录
 
         # 结局
         self.ending_triggered: bool = False
@@ -283,7 +288,10 @@ class GameState:
             "turn_count": self.turn_count,
             "flags": self.flags,
             "ending_triggered": self.ending_triggered,
-            "ending_type": self.ending_type
+            "ending_type": self.ending_type,
+            "active_benefits": self.active_benefits,
+            "scene_objects": self.scene_objects,
+            "npc_assist_log": self.npc_assist_log,
         }
 
     @classmethod
@@ -300,6 +308,9 @@ class GameState:
         state.flags = data.get("flags", {})
         state.ending_triggered = data.get("ending_triggered", False)
         state.ending_type = data.get("ending_type", "")
+        state.active_benefits = data.get("active_benefits", [])
+        state.scene_objects = data.get("scene_objects", [])
+        state.npc_assist_log = data.get("npc_assist_log", [])
         return state
 
 
@@ -806,13 +817,19 @@ class WorldlineSkill:
             "scene": self.state.current_scene
         }
 
-    def process_turn(self, player_input: str) -> Dict:
+    def process_turn(
+        self,
+        player_input: str,
+        dc_modifier: int = 0,
+        advantage: bool = False,
+        disadvantage: bool = False
+    ) -> Dict:
         """
         处理一个游戏回合
 
         流程：
         1. LLM分析意图 → 检定配置
-        2. d20投骰 → 客观结果
+        2. d20投骰 → 客观结果（支持外部DC修正和优势/劣势）
         3. LLM生成叙事（基于骰子结果）
         4. 应用状态变更
         """
@@ -837,12 +854,17 @@ class WorldlineSkill:
             }
 
         # Step 2: d20检定（客观判定）
+        # 应用外部修正（来自战术准备、NPC协助、环境互动）
+        effective_dc = max(1, analysis.base_dc + dc_modifier)
+
         attr_value = self.state.player["attributes"].get(
             analysis.primary_attribute, 10
         )
         check_result = self.d20.execute_check(
             attribute_value=attr_value,
-            dc=analysis.base_dc
+            dc=effective_dc,
+            advantage=advantage,
+            disadvantage=disadvantage
         )
 
         # Step 3: LLM生成叙事（基于骰子结果）
@@ -967,6 +989,187 @@ class WorldlineSkill:
         scene_change = consequences.get("scene_change", "")
         if scene_change:
             self.state.current_scene = scene_change
+
+    # ------------------------------------------------------------------
+    # 战术增强系统（v4.3.0）
+    # 整合方案1（前置准备）+ 方案3（NPC协作）+ 方案4（环境互动）
+    # ------------------------------------------------------------------
+
+    def set_scene_objects(self, objects: List[Dict]) -> Dict:
+        """设置当前场景中的可互动物体。"""
+        self.state.scene_objects = objects
+        return {
+            "set_count": len(objects),
+            "objects": [{"id": o.get("id"), "name": o.get("name")} for o in objects]
+        }
+
+    def interact_with_scene_object(self, object_id: str, player_input: str) -> Dict:
+        """
+        玩家与场景物体互动。
+        成功后会将该物体对应的 benefit 加入 active_benefits。
+        """
+        obj = None
+        for o in self.state.scene_objects:
+            if o.get("id") == object_id:
+                obj = o
+                break
+
+        if not obj:
+            return {"error": f"场景中不存在物体: {object_id}"}
+
+        if obj.get("activated"):
+            return {"error": f"该物体已被互动过: {obj.get('name')}"}
+
+        # 调用标准回合流程处理互动本身
+        result = self.process_turn(player_input)
+
+        if "error" in result:
+            return result
+
+        # 若互动成功（成功或勉强成功），激活 benefit
+        if result.get("check", {}).get("success") or result.get("success"):
+            obj["activated"] = True
+            benefit = obj.get("benefit")
+            if benefit:
+                benefit["source"] = f"scene_object:{object_id}"
+                benefit["source_name"] = obj.get("name")
+                self.state.active_benefits.append(benefit)
+                result["activated_benefit"] = benefit
+
+        result["interacted_object"] = {"id": object_id, "name": obj.get("name")}
+        return result
+
+    def execute_npc_check(self, npc_name: str, action: str, attribute: str, dc: int) -> Dict:
+        """
+        为 NPC 执行一次 d20 检定，模拟 NPC 执行协任务的结果。
+        成功后自动为玩家添加一个 active_benefit。
+        """
+        # NPC 默认属性取 8-14（平凡人），关系好的 NPC 视为 +2
+        base_attr = 10
+        rel = self.state.npcs.get(npc_name, {}).get("relationship", 0)
+        rel_bonus = max(-2, min(4, rel // 20))  # -2 ~ +4
+        attr_value = max(1, min(20, base_attr + rel_bonus))
+
+        check_result = self.d20.execute_check(
+            attribute_value=attr_value,
+            dc=dc
+        )
+
+        log_entry = {
+            "turn": self.state.turn_count,
+            "npc": npc_name,
+            "action": action,
+            "attribute": attribute,
+            "dc": dc,
+            "check": check_result.to_dict()
+        }
+        self.state.npc_assist_log.append(log_entry)
+
+        result = {
+            "npc": npc_name,
+            "action": action,
+            "check": check_result.to_dict(),
+            "relationship_bonus": rel_bonus
+        }
+
+        # 大成功或成功：添加 benefit
+        if check_result.success:
+            benefit = {
+                "type": "npc_assist",
+                "name": f"{npc_name}的协助",
+                "description": f"{npc_name}成功执行了'{action}'，你接下来的相关行动获得加成",
+                "dc_modifier": -3 if check_result.degree in ["大成功", "成功"] else -1,
+                "advantage": check_result.degree == "大成功",
+                "applies_to": [attribute] if attribute else [],
+                "remaining_uses": 1,
+                "source": f"npc:{npc_name}"
+            }
+            self.state.active_benefits.append(benefit)
+            result["granted_benefit"] = benefit
+        else:
+            # 失败可能带来负面暗示
+            if check_result.degree in ["失败", "大失败"]:
+                result["warning"] = f"{npc_name}任务失败，敌方可能已警觉"
+
+        return result
+
+    def add_active_benefit(self, name: str, description: str, dc_modifier: int = 0,
+                           advantage: bool = False, applies_to: Optional[List[str]] = None,
+                           remaining_uses: int = 1) -> Dict:
+        """主持人手动添加一个战术加成（通常用于记录玩家的前置准备）。"""
+        benefit = {
+            "type": "manual",
+            "name": name,
+            "description": description,
+            "dc_modifier": dc_modifier,
+            "advantage": advantage,
+            "applies_to": applies_to or [],
+            "remaining_uses": remaining_uses,
+            "source": "host"
+        }
+        self.state.active_benefits.append(benefit)
+        return {"added": True, "benefit": benefit}
+
+    def consume_active_benefit(self, name: str) -> Optional[Dict]:
+        """按名称消耗一个 active_benefit。"""
+        for i, b in enumerate(self.state.active_benefits):
+            if b.get("name") == name:
+                b["remaining_uses"] -= 1
+                consumed = b.copy()
+                if b["remaining_uses"] <= 0:
+                    self.state.active_benefits.pop(i)
+                return {"consumed": consumed, "remaining": b.get("remaining_uses", 0)}
+        return None
+
+    def get_active_benefits(self, filter_attribute: Optional[str] = None) -> List[Dict]:
+        """获取当前所有可用的战术加成，可选按属性过滤。"""
+        self._clear_expired_benefits()
+        if not filter_attribute:
+            return [b.copy() for b in self.state.active_benefits]
+        return [
+            b.copy() for b in self.state.active_benefits
+            if not b.get("applies_to") or filter_attribute in b.get("applies_to", [])
+        ]
+
+    def calculate_effective_dc(self, base_dc: int, attribute: str) -> Dict:
+        """
+        计算经过所有可用加成后的最终 DC，以及是否获得 advantage。
+        """
+        self._clear_expired_benefits()
+        applicable = self.get_active_benefits(filter_attribute=attribute)
+
+        total_modifier = 0
+        has_advantage = False
+        applied_benefits = []
+
+        for b in applicable:
+            # 只计算未用完且有 DC 修正或 advantage 的 benefit
+            if b.get("remaining_uses", 0) > 0:
+                mod = b.get("dc_modifier", 0)
+                if mod:
+                    total_modifier += mod
+                    applied_benefits.append({"name": b["name"], "modifier": mod})
+                if b.get("advantage"):
+                    has_advantage = True
+                    applied_benefits.append({"name": b["name"], "effect": "advantage"})
+
+        effective_dc = max(1, base_dc + total_modifier)
+        return {
+            "base_dc": base_dc,
+            "attribute": attribute,
+            "applied_benefits": applied_benefits,
+            "total_modifier": total_modifier,
+            "effective_dc": effective_dc,
+            "advantage": has_advantage
+        }
+
+    def _clear_expired_benefits(self):
+        """清理已超过使用次数或来源不存在的过期 benefit。"""
+        # 简单的 TTL 机制：可以按回合数过期（未来扩展）
+        self.state.active_benefits = [
+            b for b in self.state.active_benefits
+            if b.get("remaining_uses", 0) > 0
+        ]
 
     def save_game(self, save_id: str) -> str:
         """保存游戏"""
