@@ -6,7 +6,7 @@ description: |
   本skill默认透明暴露d20检定结果，支持任意世界观，兼容旧版存档迁移。
 ---
 
-# Worldline Choice — Agent 主持手册 (v4.2.0)
+# Worldline Choice — Agent 主持手册 (v4.2.1)
 
 ## 1. 这是什么？
 

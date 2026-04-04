@@ -1,6 +1,6 @@
 {
   "name": "worldline-choice",
-  "version": "4.2.0",
+  "version": "4.2.1",
   "description": "AI驱动的互动叙事游戏引擎，支持LLM驱动的意图识别和d20客观检定",
   "author": "Worldline Team",
   "entry": "worldline_skill.py",

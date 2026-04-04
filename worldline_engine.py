@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Worldline Choice - 兼容入口层 (v4.2.0)
+Worldline Choice - 兼容入口层 (v4.2.1)
 
 本文件作为向后兼容的入口点，统一代理到 worldline_skill.py 的核心实现。
 确保 agent / CLI / 旧代码都能使用到内建的 d20 检定系统。
@@ -228,7 +228,7 @@ class WorldlineEngine(WorldlineSkill):
         data["flags"] = flags
 
         # 版本升级标记
-        data["version"] = "4.2.0-migrated"
+        data["version"] = "4.2.1-migrated"
         return data
 
     # ------------------------------------------------------------------
