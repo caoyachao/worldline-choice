@@ -7,7 +7,7 @@ description: AI驱动互动叙事游戏引擎 - 在无限世界线中，你的�
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-v4.3.0-green.svg)](https://github.com/caoyachao/worldline-choice)
+[![Version](https://img.shields.io/badge/version-v4.4.0-green.svg)](https://github.com/caoyachao/worldline-choice)
 
 > 对智能体说：
 > 
@@ -413,6 +413,19 @@ python3 test_engine.py
 ---
 
 ## 📜 版本历史
+
+### v4.4.0 (2026-04-07) - d20强制检定版
+- 强制execute_check工具调用，禁止LLM脑补骰子结果
+- 新增强制检定顺序检查清单
+- 强化叙事prompt中的骰子结果绝对性约束
+
+### v4.3.0 (2026-04-04) - 战术增强版
+- 整合前置准备、NPC协作、环境互动三大战术系统
+- 引入active_benefits加成链机制
+
+### v4.0.0 (2026-04-01) - 架构革命版
+- 升级为LLM + d20混合架构
+- 引入ABCD+E选项系统
 
 ### v3.3.2 (2026-03-31) - 平衡补丁版
 - 防套利机制：勉强成功降级、指挥链过载、信息泄露

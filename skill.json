@@ -1,7 +1,7 @@
 {
   "name": "worldline-choice",
-  "version": "4.3.0",
-  "description": "AI驱动互动叙事游戏引擎 v4.3.0 - 战术增强版。在LLM+d20基础上整合前置准备、NPC协作、环境互动三大战术系统，允许连续回合形成加成链，提升策略深度与可玩性。",
+  "version": "4.4.0",
+  "description": "AI驱动互动叙事游戏引擎 v4.4.0 - d20强制检定版。强制执行execute_check工具调用，禁止LLM脑补骰子结果，确保叙事严格服从客观检定。支持前置准备、NPC协作、环境互动三大战术系统。"
   "author": "Worldline Team",
   "entry": "worldline_skill.py",
   "runtime": "python3",

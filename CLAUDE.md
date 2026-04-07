@@ -4,79 +4,101 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Worldline Choice (世界线·抉择) is an AI-driven interactive narrative game engine.
+Worldline Choice (世界线·抉择) is an AI-driven interactive narrative game engine using LLM + d20 check hybrid architecture.
 
-**Current Version**: 4.0.0 - LLM驱动 + d20检定混合架构
+**Current Version**: 4.4.0 - Mandatory d20 Check Edition
 
 This is a pure-Python project with no external dependencies.
 
 ## Common Commands
 
-- **Run legacy tests**: `python3 test_engine.py`
-- **Run new skill tests**: `python3 test_llm_skill.py`
-- **Start CLI mode**: `python3 worldline_skill.py`
-- **Test OpenClaw adapter**: `python3 openclaw_adapter.py`
+- **Run tests**: `python3 test_llm_skill.py`
+- **Start CLI mode**: `python3 worldline_skill.py` or `python3 worldline_engine.py`
+- **Start new game (CLI)**: `python3 worldline_engine.py --new "world_setting" "role" "name"`
+- **List saves**: `python3 worldline_engine.py --list`
+- **Load save**: `python3 worldline_engine.py --load <save_id>`
 
-## Architecture (v4.0.0 - LLM Driven)
+## Architecture (v4.4.0 - Mandatory d20 Check)
 
 ### Core Design Philosophy
 
 **Separation of Concerns**:
-1. **LLM** handles: Intent understanding, DC assessment, narrative generation
-2. **d20 engine** handles: Objective success/failure determination
-3. **Game engine** handles: State management, rule enforcement
+1. **LLM** handles: Intent understanding, DC assessment, narrative generation (based on dice results)
+2. **d20 engine** handles: Objective success/failure determination (mandatory via `execute_check`)
+3. **Game engine** handles: State management, rule enforcement, narrative validation
+4. **Tactical system** handles: Preparation benefits, NPC assistance, scene object interactions
 
-This architecture eliminates hardcoded keyword matching while maintaining objective game mechanics.
+**Mandatory d20 Check Principle**:
+- LLM **MUST** call `execute_check` tool to get dice results
+- LLM is **PROHIBITED** from inventing dice results
+- Narrative generation **REQUIRES** `check_result` parameter
+- Dice results are absolute and cannot be overridden narratively
 
 ### File Structure
 
-**`worldline_skill.py`** — Core skill implementation:
-- `WorldlineSkill` — Main game controller
+**`worldline_skill.py`** — Core skill implementation (v4.3.0):
+- `WorldlineSkill` — Main game controller with tactical enhancement APIs
 - `D20Engine` — Pure code dice rolling (no LLM involvement)
-- `LLMDriver` — Abstract interface for LLM calls
-- `GameState` — Simplified state management
+- `GameState` — Game state with `active_benefits`, `scene_objects`, `npc_assist_log`
+- Tactical APIs: `set_scene_objects()`, `execute_npc_check()`, `add_active_benefit()`, `calculate_effective_dc()`
+
+**`worldline_engine.py`** — Backward compatibility layer:
+- `WorldlineEngine` — Wraps `WorldlineSkill` with legacy API compatibility
+- Handles save migration from v3.x to v4.x format
+- CLI entry point with `--new`, `--load`, `--list` commands
 
 **`openclaw_adapter.py`** — OpenClaw integration:
 - `OpenClawAdapter` — Wraps skill for OpenClaw runtime
-- `create_skill()` — Factory function for OpenClaw
-- Tool definitions for OpenClaw function calling
+- Tool definitions matching `skill.json`
 
 **`skill.json`** — OpenClaw skill manifest with tool schemas
 
-**Legacy files** (maintained for backward compatibility):
-- `worldline_engine.py` — v3.3.2 legacy engine
-- `save_manager.py` — Standalone save manager
-- `test_engine.py` — Legacy tests
+### Key Constraint: Mandatory d20 Check Execution
 
-### Game Flow
+**Strict Enforcement Rules**:
+1. **LLM MUST call `execute_check` tool** - Self-invented dice results are prohibited
+2. **Narrative generation requires `check_result` parameter** - No narrative without dice
+3. **Dice results are absolute** - LLM cannot "soften" failures or "enhance" successes narratively
+4. **Validation prompts** include checklists ensuring narrative fidelity to dice results
 
+The prompt system includes explicit "red line" prohibitions:
+- ❌ Using "but", "however", "unexpectedly" to reverse outcomes
+- ❌ Describing failures as "almost succeeded" or "close calls"
+- ❌ Adding compensatory benefits to failed rolls
+- ❌ Generating result-oriented narratives before dice execution
+
+### Tactical Enhancement System (v4.3.0)
+
+Three new mechanics enable strategic depth through "benefit chains":
+
+1. **Preparation Actions**: Players can spend turns setting up advantages (e.g., observing environment, laying traps)
+2. **NPC Assistance**: Allied NPCs can attempt checks to grant players advantage on subsequent turns
+3. **Scene Objects**: Interactive environmental elements can provide DC modifiers when utilized
+
+**Active Benefit Lifecycle**:
 ```
-Player Input
+Player/NPC succeeds at preparation action
     ↓
-LLM Analysis → ActionAnalysis (intent, DC, attribute)
+Engine calls `add_active_benefit()` with DC modifier/advantage/usage count
     ↓
-Pre-condition Check (items, knowledge)
+On subsequent turns, `process_turn()` automatically applies matching benefits
     ↓
-d20 Roll → CheckResult (objective success/failure)
-    ↓
-LLM Narrative Generation (based on dice result)
-    ↓
-Apply Consequences → Update State
+Benefit is consumed when used (or expires after specified uses)
 ```
 
-### Key Constraint: LLM Cannot Override Dice
-
-The LLM is explicitly prompted to:
-- Analyze intent and suggest DC **before** rolling
-- Generate narrative **only after** seeing the dice result
-- Never "adjust" a failure into success narratively
+**Tactical APIs**:
+- `set_scene_objects(objects)` — Define interactable scene elements with potential benefits
+- `interact_with_scene_object(object_id, player_input)` — Player attempts to use an object
+- `execute_npc_check(npc_name, action, attribute, dc)` — NPC attempts assist action
+- `add_active_benefit(...)` — Manually register a tactical benefit
+- `calculate_effective_dc(base_dc, attribute)` — Compute DC after applying all active benefits
 
 ### d20 Check System
 
 - Formula: `d20 + (attribute - 10) // 2 >= DC`
 - Result degrees: 大成功 / 成功 / 勉强成功 / 勉强失败 / 失败 / 大失败
 - Natural 20 = critical success; natural 1 = critical failure
-- No DC modifiers from previous results (simplified from v3.3.2)
+- Advantage/disadvantage supported via `advantage`/`disadvantage` parameters
 
 ### Attributes
 
@@ -88,12 +110,38 @@ Six universal attributes used across all world settings:
 - `RESILIENCE` — Constitution, willpower
 - `LUCK` — Fortune, coincidence
 
+### Game Flow
+
+```
+Player Input
+    ↓
+LLM Analysis → ActionAnalysis (intent, DC, attribute)
+    ↓
+calculate_effective_dc() ← Apply active_benefits
+    ↓
+d20 Roll → CheckResult (objective success/failure)
+    ↓
+LLM Narrative Generation (based on dice result)
+    ↓
+Apply Consequences → Update State
+    ↓
+(If preparation action) → add_active_benefit()
+```
+
 ### Running Modes
 
 **1. CLI Mode** (`python3 worldline_skill.py`):
 ```python
 skill = WorldlineSkill()
 skill.start_game("武侠", "剑客", "李逍遥")
+# Set up scene objects for tactical play
+skill.set_scene_objects([{
+    "id": " chandelier",
+    "name": "吊灯",
+    "description": "摇摇欲坠的古老吊灯",
+    "interaction_hint": "可以试着割断绳索制造混乱",
+    "benefit": {"dc_modifier": -3, "applies_to": ["REFLEX"]}
+}])
 result = skill.process_turn("我尝试与店主交谈")
 ```
 
@@ -104,66 +152,54 @@ adapter = create_skill(openclaw_llm_call)
 adapter.start_game("赛博朋克", "黑客", "V")
 ```
 
-**3. Hybrid Mode** (LLM for analysis, code for dice):
-```python
-# LLM analyzes intent
-analysis = llm.analyze_action("hack the system", state)
-
-# Code executes dice
-result = D20Engine.execute_check(
-    attribute_value=state.player['attributes']['MIND'],
-    dc=analysis.base_dc
-)
-
-# LLM generates narrative
-narrative = llm.generate_narrative(action, analysis.intention, result, world)
-```
-
 ### Save Format
 
-Simplified v4.0.0 format:
+v4.3.0 format with tactical data:
 ```json
 {
-  "version": "4.0.0-llm-driven",
+  "version": "4.4.0",
   "world_setting": "武侠",
   "player": {
     "name": "李逍遥",
     "attributes": {"FORCE": 12, "MIND": 14, ...},
     "items": ["长剑", "干粮"]
   },
+  "active_benefits": [
+    {"name": "埋伏就绪", "dc_modifier": -3, "advantage": false, "remaining_uses": 1}
+  ],
+  "scene_objects": [...],
+  "npc_assist_log": [...],
   "history": [...],
-  "turn_count": 15,
-  "flags": {"met_master": true}
+  "turn_count": 15
 }
 ```
 
+Save location: `~/.claude/skills/worldline_choice/saves/`
+
 ### Testing
 
-- `test_llm_skill.py` — Tests for new LLM-driven architecture
-- `test_engine.py` — Legacy tests for backward compatibility
+- `test_llm_skill.py` — Tests for v4.3.0 architecture including tactical system
+- `test_engine.py` — Legacy backward compatibility tests
 
 Key test scenarios:
 - d20 randomness and distribution
-- LLM analysis (with mock)
-- State serialization
-- Multi-world setting compatibility
-- LLM/dice separation (verifying dice results are objective)
+- Active benefit application and consumption
+- NPC assist check flow
+- Scene object interaction
+- Save/load with tactical data
 
 ### Migration from v3.x
 
-v3.x saves can be loaded but will be converted to v4 format:
+v3.x saves can be loaded via `worldline_engine.py` and are automatically converted:
 - Rich fields (npc_database, session_history) flattened
-- Complex tactical checks simplified
-- Focus on single-action turns
+- Attribute names mapped to 6 universal dimensions
+- Tactical fields initialized empty
 
 ### Extending
 
-To add new world setting support:
-1. No code changes needed (LLM understands any setting)
-2. Update `world_setting` parameter in `start_game()`
-3. LLM automatically adapts DC assessment and narrative style
-
-To customize mechanics:
-1. Modify `LLMDriver._build_analysis_prompt()` for DC logic
-2. Modify `D20Engine.execute_check()` for dice mechanics
-3. State management in `GameState`
+To add new tactical mechanics:
+1. Extend `GameState` with new tactical fields
+2. Add management methods to `WorldlineSkill`
+3. Update `process_turn()` to check and apply new modifiers
+4. Update `skill.json` with new tool definitions
+5. Update `openclaw_adapter.py` with new tool handlers
