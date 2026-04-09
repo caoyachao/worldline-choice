@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Worldline Choice - LLM驱动 + d20检定混合架构 (v4.4.0)
+Worldline Choice - LLM驱动 + d20检定混合架构 (v4.4.1)
 面向OpenClaw智能体和CLI的Skill实现
 
 核心设计：
@@ -197,7 +197,7 @@ class D20Engine:
 class GameState:
     """精简版游戏状态，专注核心数据"""
 
-    VERSION = "4.4.0"
+    VERSION = "4.4.1"
 
     def __init__(self):
         # 基础信息
@@ -935,10 +935,28 @@ class WorldlineSkill:
             self.state.ending_triggered = True
             self.state.ending_type = narrative_result.get("ending_type", "")
 
-        # 自动存档
+        # 强制自动存档（每回合结束时必然执行）
+        auto_save_info = {"save_id": None, "success": False, "timestamp": None, "error": None}
         if self.auto_save:
-            self.save_game("auto")
+            try:
+                save_id = f"auto_turn_{self.state.turn_count}_{int(datetime.now().timestamp())}"
+                filepath = self.save_game(save_id)
+                auto_save_info = {
+                    "save_id": save_id,
+                    "success": True,
+                    "timestamp": datetime.now().isoformat(),
+                    "filepath": filepath
+                }
+            except Exception as e:
+                auto_save_info = {
+                    "save_id": None,
+                    "success": False,
+                    "timestamp": datetime.now().isoformat(),
+                    "error": str(e)
+                }
 
+        # 返回结果中包含强制保存状态
+        turn_result["auto_save"] = auto_save_info
         return turn_result
 
     def generate_turn_options(

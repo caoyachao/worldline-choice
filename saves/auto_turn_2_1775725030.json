@@ -1,0 +1,97 @@
+{
+  "version": "4.4.1",
+  "world_setting": "奇幻",
+  "world_description": "",
+  "current_scene": "奇幻的世界",
+  "player": {
+    "name": "测试者",
+    "role": "法师",
+    "attributes": {
+      "FORCE": 8,
+      "MIND": 11,
+      "INFLUENCE": 13,
+      "REFLEX": 9,
+      "RESILIENCE": 13,
+      "LUCK": 15
+    },
+    "items": [],
+    "tags": [],
+    "secrets": []
+  },
+  "npcs": {},
+  "history": [
+    {
+      "turn": 1,
+      "action": "悄悄躲进附近的阴影中，仔细观察声音来源和周围情况",
+      "result": {
+        "turn": 1,
+        "action": "悄悄躲进附近的阴影中，仔细观察声音来源和周围情况",
+        "intention": "尝试进行一般行动",
+        "narrative": "你的行动失败了。",
+        "consequences": {
+          "attribute_changes": {},
+          "items_gained": [],
+          "items_lost": [],
+          "relationship_changes": {},
+          "flags_set": {},
+          "tags_gained": [],
+          "scene_change": ""
+        },
+        "ending_triggered": false,
+        "check": {
+          "roll": 4,
+          "modifier": 0,
+          "total": 4,
+          "dc": 12,
+          "success": false,
+          "margin": -8,
+          "degree": "失败"
+        },
+        "auto_save": {
+          "save_id": "auto_turn_1_1775725030",
+          "success": true,
+          "timestamp": "2026-04-09T16:57:10.425053",
+          "filepath": "./saves/auto_turn_1_1775725030.json"
+        }
+      },
+      "timestamp": "2026-04-09T16:57:10.424034"
+    },
+    {
+      "turn": 2,
+      "action": "我施放火球术",
+      "result": {
+        "turn": 2,
+        "action": "我施放火球术",
+        "intention": "尝试进行一般行动",
+        "narrative": "你的行动失败了。",
+        "consequences": {
+          "attribute_changes": {},
+          "items_gained": [],
+          "items_lost": [],
+          "relationship_changes": {},
+          "flags_set": {},
+          "tags_gained": [],
+          "scene_change": ""
+        },
+        "ending_triggered": false,
+        "check": {
+          "roll": 6,
+          "modifier": 0,
+          "total": 6,
+          "dc": 12,
+          "success": false,
+          "margin": -6,
+          "degree": "失败"
+        }
+      },
+      "timestamp": "2026-04-09T16:57:10.425264"
+    }
+  ],
+  "turn_count": 2,
+  "flags": {},
+  "ending_triggered": false,
+  "ending_type": "",
+  "active_benefits": [],
+  "scene_objects": [],
+  "npc_assist_log": []
+}

@@ -215,7 +215,8 @@ def test_llm_d20_separation():
 
     # 如果骰子失败，叙事不应该描述成功
     if not check["success"]:
-        assert "失败" in narrative or "灾难" in narrative or "问题" in narrative, \
+        failure_keywords = ["失败", "灾难", "差一点", "差点", "没成功", "没能"]
+        assert any(kw in narrative for kw in failure_keywords), \
             f"失败检定应该有失败叙事: {narrative}"
         print("✓ 失败检定的叙事正确反映失败")
 

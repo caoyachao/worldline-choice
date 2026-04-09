@@ -7,7 +7,7 @@ description: AI驱动互动叙事游戏引擎 - 在无限世界线中，你的�
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-v4.4.0-green.svg)](https://github.com/caoyachao/worldline-choice)
+[![Version](https://img.shields.io/badge/version-v4.4.1-green.svg)](https://github.com/caoyachao/worldline-choice)
 
 > 对智能体说：
 > 
@@ -413,6 +413,11 @@ python3 test_engine.py
 ---
 
 ## 📜 版本历史
+
+### v4.4.1 (2026-04-09) - 强制自动保存版
+- 引擎层强制执行每回合自动保存，返回结果包含 `auto_save` 字段
+- 新增「自动保存机制」章节，禁止LLM保存相关幻觉行为
+- 借鉴Harness强制工具调用思想，确保保存操作真实执行
 
 ### v4.4.0 (2026-04-07) - d20强制检定版
 - 强制execute_check工具调用，禁止LLM脑补骰子结果

@@ -1,0 +1,241 @@
+{
+  "version": "4.4.0",
+  "world_setting": "测试世界",
+  "world_description": "",
+  "current_scene": "测试世界的世界",
+  "player": {
+    "name": "玩家",
+    "role": "测试者",
+    "attributes": {
+      "FORCE": 13,
+      "MIND": 11,
+      "INFLUENCE": 14,
+      "REFLEX": 16,
+      "RESILIENCE": 11,
+      "LUCK": 11
+    },
+    "items": [],
+    "tags": [],
+    "secrets": []
+  },
+  "npcs": {},
+  "history": [
+    {
+      "turn": 1,
+      "action": "测试行动",
+      "result": {
+        "turn": 1,
+        "action": "测试行动",
+        "intention": "尝试进行一般行动",
+        "narrative": "你的行动失败了。",
+        "consequences": {
+          "attribute_changes": {},
+          "items_gained": [],
+          "items_lost": [],
+          "relationship_changes": {},
+          "flags_set": {},
+          "tags_gained": [],
+          "scene_change": ""
+        },
+        "ending_triggered": false,
+        "check": {
+          "roll": 4,
+          "modifier": 0,
+          "total": 4,
+          "dc": 12,
+          "success": false,
+          "margin": -8,
+          "degree": "失败"
+        },
+        "auto_save": {
+          "save_id": "auto_turn_1_1775724530",
+          "success": true,
+          "timestamp": "2026-04-09T16:48:50.866769",
+          "filepath": "./saves/auto_turn_1_1775724530.json"
+        }
+      },
+      "timestamp": "2026-04-09T16:48:50.866242"
+    },
+    {
+      "turn": 2,
+      "action": "测试行动",
+      "result": {
+        "turn": 2,
+        "action": "测试行动",
+        "intention": "尝试进行一般行动",
+        "narrative": "你差一点就成功了。",
+        "consequences": {
+          "attribute_changes": {},
+          "items_gained": [],
+          "items_lost": [],
+          "relationship_changes": {},
+          "flags_set": {},
+          "tags_gained": [],
+          "scene_change": ""
+        },
+        "ending_triggered": false,
+        "check": {
+          "roll": 11,
+          "modifier": 0,
+          "total": 11,
+          "dc": 12,
+          "success": false,
+          "margin": -1,
+          "degree": "勉强失败"
+        },
+        "auto_save": {
+          "save_id": "auto_turn_2_1775724530",
+          "success": true,
+          "timestamp": "2026-04-09T16:48:50.867712",
+          "filepath": "./saves/auto_turn_2_1775724530.json"
+        }
+      },
+      "timestamp": "2026-04-09T16:48:50.867081"
+    },
+    {
+      "turn": 3,
+      "action": "测试行动",
+      "result": {
+        "turn": 3,
+        "action": "测试行动",
+        "intention": "尝试进行一般行动",
+        "narrative": "你顺利地完成了行动。",
+        "consequences": {
+          "attribute_changes": {},
+          "items_gained": [],
+          "items_lost": [],
+          "relationship_changes": {},
+          "flags_set": {},
+          "tags_gained": [],
+          "scene_change": ""
+        },
+        "ending_triggered": false,
+        "check": {
+          "roll": 18,
+          "modifier": 0,
+          "total": 18,
+          "dc": 12,
+          "success": true,
+          "margin": 6,
+          "degree": "成功"
+        },
+        "auto_save": {
+          "save_id": "auto_turn_3_1775724530",
+          "success": true,
+          "timestamp": "2026-04-09T16:48:50.868981",
+          "filepath": "./saves/auto_turn_3_1775724530.json"
+        }
+      },
+      "timestamp": "2026-04-09T16:48:50.867977"
+    },
+    {
+      "turn": 4,
+      "action": "测试行动",
+      "result": {
+        "turn": 4,
+        "action": "测试行动",
+        "intention": "尝试进行一般行动",
+        "narrative": "你的行动失败了。",
+        "consequences": {
+          "attribute_changes": {},
+          "items_gained": [],
+          "items_lost": [],
+          "relationship_changes": {},
+          "flags_set": {},
+          "tags_gained": [],
+          "scene_change": ""
+        },
+        "ending_triggered": false,
+        "check": {
+          "roll": 5,
+          "modifier": 0,
+          "total": 5,
+          "dc": 12,
+          "success": false,
+          "margin": -7,
+          "degree": "失败"
+        },
+        "auto_save": {
+          "save_id": "auto_turn_4_1775724530",
+          "success": true,
+          "timestamp": "2026-04-09T16:48:50.870816",
+          "filepath": "./saves/auto_turn_4_1775724530.json"
+        }
+      },
+      "timestamp": "2026-04-09T16:48:50.869345"
+    },
+    {
+      "turn": 5,
+      "action": "测试行动",
+      "result": {
+        "turn": 5,
+        "action": "测试行动",
+        "intention": "尝试进行一般行动",
+        "narrative": "你的行动失败了。",
+        "consequences": {
+          "attribute_changes": {},
+          "items_gained": [],
+          "items_lost": [],
+          "relationship_changes": {},
+          "flags_set": {},
+          "tags_gained": [],
+          "scene_change": ""
+        },
+        "ending_triggered": false,
+        "check": {
+          "roll": 5,
+          "modifier": 0,
+          "total": 5,
+          "dc": 12,
+          "success": false,
+          "margin": -7,
+          "degree": "失败"
+        },
+        "auto_save": {
+          "save_id": "auto_turn_5_1775724530",
+          "success": true,
+          "timestamp": "2026-04-09T16:48:50.872393",
+          "filepath": "./saves/auto_turn_5_1775724530.json"
+        }
+      },
+      "timestamp": "2026-04-09T16:48:50.871391"
+    },
+    {
+      "turn": 6,
+      "action": "测试行动",
+      "result": {
+        "turn": 6,
+        "action": "测试行动",
+        "intention": "尝试进行一般行动",
+        "narrative": "你顺利地完成了行动。",
+        "consequences": {
+          "attribute_changes": {},
+          "items_gained": [],
+          "items_lost": [],
+          "relationship_changes": {},
+          "flags_set": {},
+          "tags_gained": [],
+          "scene_change": ""
+        },
+        "ending_triggered": false,
+        "check": {
+          "roll": 18,
+          "modifier": 0,
+          "total": 18,
+          "dc": 12,
+          "success": true,
+          "margin": 6,
+          "degree": "成功"
+        }
+      },
+      "timestamp": "2026-04-09T16:48:50.872580"
+    }
+  ],
+  "turn_count": 6,
+  "flags": {},
+  "ending_triggered": false,
+  "ending_type": "",
+  "active_benefits": [],
+  "scene_objects": [],
+  "npc_assist_log": []
+}

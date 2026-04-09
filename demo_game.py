@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Worldline Choice v4.4.0 演示脚本
-展示强制d20检定机制
+Worldline Choice v4.4.1 演示脚本
+展示强制d20检定 + 强制自动保存机制
 """
 
 import json
@@ -13,7 +13,7 @@ from worldline_skill import WorldlineSkill
 
 def demo_game():
     print("="*60)
-    print("Worldline Choice v4.4.0 - d20强制检定演示")
+    print("Worldline Choice v4.4.1 - d20强制检定 + 自动保存演示")
     print("="*60)
 
     skill = WorldlineSkill()
@@ -84,7 +84,7 @@ def demo_game():
     print(f"历史记录数: {len(state.get('history', []))}")
 
     print(f"\n{'='*60}")
-    print("✓ 演示完成 - v4.4.0 d20强制检定系统运行正常")
+    print("✓ 演示完成 - v4.4.1 d20强制检定 + 自动保存系统运行正常")
     print("="*60)
 
 if __name__ == "__main__":

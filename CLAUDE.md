@@ -6,19 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Worldline Choice (世界线·抉择) is an AI-driven interactive narrative game engine using LLM + d20 check hybrid architecture.
 
-**Current Version**: 4.4.0 - Mandatory d20 Check Edition
+**Current Version**: 4.4.1 - Mandatory Auto-Save Edition
 
 This is a pure-Python project with no external dependencies.
 
 ## Common Commands
 
-- **Run tests**: `python3 test_llm_skill.py`
-- **Start CLI mode**: `python3 worldline_skill.py` or `python3 worldline_engine.py`
+- **Run all tests**: `python3 test_llm_skill.py`
+- **Run specific test**: `python3 test_llm_skill.py test_d20_engine`
+- **Start CLI mode**: `python3 worldline_skill.py` or `./worldline_choice.sh`
 - **Start new game (CLI)**: `python3 worldline_engine.py --new "world_setting" "role" "name"`
 - **List saves**: `python3 worldline_engine.py --list`
 - **Load save**: `python3 worldline_engine.py --load <save_id>`
 
-## Architecture (v4.4.0 - Mandatory d20 Check)
+## Architecture (v4.4.1 - Mandatory Auto-Save)
 
 ### Core Design Philosophy
 
@@ -130,13 +131,13 @@ Apply Consequences → Update State
 
 ### Running Modes
 
-**1. CLI Mode** (`python3 worldline_skill.py`):
+**1. CLI Mode** (`python3 worldline_skill.py` or `./worldline_choice.sh`):
 ```python
 skill = WorldlineSkill()
 skill.start_game("武侠", "剑客", "李逍遥")
 # Set up scene objects for tactical play
 skill.set_scene_objects([{
-    "id": " chandelier",
+    "id": "chandelier",
     "name": "吊灯",
     "description": "摇摇欲坠的古老吊灯",
     "interaction_hint": "可以试着割断绳索制造混乱",
@@ -157,7 +158,7 @@ adapter.start_game("赛博朋克", "黑客", "V")
 v4.3.0 format with tactical data:
 ```json
 {
-  "version": "4.4.0",
+  "version": "4.4.1",
   "world_setting": "武侠",
   "player": {
     "name": "李逍遥",
