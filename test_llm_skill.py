@@ -576,6 +576,114 @@ def test_directory_isolation():
     print("✓ 游戏目录隔离测试通过\n")
 
 
+def test_npc_relationship_system():
+    """测试完整NPC关系系统（v4.5.0）"""
+    print("="*60)
+    print("测试12: NPC关系系统")
+    print("="*60)
+
+    skill = WorldlineSkill(show_dice=True)
+    skill.start_game("武侠", "剑客", "李逍遥")
+
+    # 测试1: 初始化完整NPC结构
+    skill.state.update_npc("店小二", relationship=10, attitude="友善", role="客栈伙计")
+    npc = skill.state.npcs["店小二"]
+    assert npc["relationship"] == 10
+    assert npc["attitude"] == "友善"
+    assert npc["role"] == "客栈伙计"
+    # 检查所有新字段自动初始化
+    assert npc["trust"] == 0
+    assert npc["fear"] == 0
+    assert npc["loyalty"] == 0
+    assert npc["affection"] == 0
+    assert npc["reputation"] == 0
+    assert npc["interaction_count"] == 0
+    assert npc["memories"] == []
+    assert npc["tags"] == []
+    assert npc["faction"] == ""
+    assert npc["location"] == ""
+    assert npc["status"] == "alive"
+    assert npc["description"] == ""
+    print("✓ 完整NPC结构初始化正确")
+
+    # 测试2: 通过 update_npc 更新多个维度
+    skill.state.update_npc("店小二", trust=15, fear=5, loyalty=10, affection=8, reputation=12)
+    npc = skill.state.npcs["店小二"]
+    assert npc["trust"] == 15
+    assert npc["fear"] == 5
+    assert npc["loyalty"] == 10
+    print("✓ 多维度情感更新正确")
+
+    # 测试3: 添加记忆
+    skill.state.add_npc_memory("店小二", "玩家给了小费", "positive")
+    assert len(skill.state.npcs["店小二"]["memories"]) == 1
+    assert skill.state.npcs["店小二"]["memories"][0]["event"] == "玩家给了小费"
+    assert skill.state.npcs["店小二"]["memories"][0]["type"] == "positive"
+    print("✓ 记忆添加正确")
+
+    # 测试4: get_npc_summary
+    summary = skill.state.get_npc_summary("店小二")
+    assert summary["name"] == "店小二"
+    assert summary["trust"] == 15
+    assert summary["recent_memories"][0]["event"] == "玩家给了小费"
+    print("✓ NPC摘要正确")
+
+    # 测试5: 通过 consequences 应用完整关系变化
+    skill.state.turn_count = 5
+    skill._apply_consequences({
+        "npc_relationship_changes": {
+            "店小二": {
+                "relationship": 5,
+                "trust": 3,
+                "fear": -2,
+                "memories": [{"event": "玩家出手相助", "type": "positive"}]
+            }
+        }
+    })
+    npc = skill.state.npcs["店小二"]
+    assert npc["relationship"] == 15  # 10+5
+    assert npc["trust"] == 18  # 15+3
+    assert npc["fear"] == 3  # 5-2
+    assert npc["interaction_count"] == 1
+    assert npc["last_interaction_turn"] == 5
+    assert len(npc["memories"]) == 2
+    print("✓ consequences 完整关系变化正确")
+
+    # 测试6: 旧版 relationship_changes 向后兼容
+    skill._apply_consequences({
+        "relationship_changes": {"店小二": 3}
+    })
+    assert skill.state.npcs["店小二"]["relationship"] == 18  # 15+3
+    assert skill.state.npcs["店小二"]["interaction_count"] == 2
+    print("✓ 旧版 relationship_changes 向后兼容")
+
+    # 测试7: 边界限制（-100~100）
+    skill.state.npcs["店小二"]["trust"] = 95
+    skill._apply_consequences({
+        "npc_relationship_changes": {"店小二": {"trust": 10}}
+    })
+    assert skill.state.npcs["店小二"]["trust"] == 100  # 被截断
+    print("✓ 边界限制正确")
+
+    # 测试8: 旧存档加载自动补全NPC字段
+    old_save = {
+        "version": "4.5.0",
+        "world_setting": "测试",
+        "player": {"name": "", "role": "", "attributes": {}, "tags": [], "secrets": []},
+        "npcs": {
+            "老王": {"relationship": 5, "attitude": "中立"}
+        }
+    }
+    old_state = GameState.from_dict(old_save)
+    assert old_state.npcs["老王"]["trust"] == 0
+    assert old_state.npcs["老王"]["fear"] == 0
+    assert old_state.npcs["老王"]["memories"] == []
+    assert old_state.npcs["老王"]["status"] == "alive"
+    print("✓ 旧存档NPC字段自动补全正确")
+
+    print("✓ NPC关系系统测试通过\n")
+
+
 def run_all_tests():
     """运行所有测试"""
     print("\n" + "="*60)
@@ -594,6 +702,7 @@ def run_all_tests():
         test_growth_system()
         test_settlement()
         test_directory_isolation()
+        test_npc_relationship_system()
 
         print("="*60)
         print("✓ 所有测试通过!")

@@ -404,14 +404,67 @@ class GameState:
         return self.hp
 
     def update_npc(self, name: str, **kwargs):
-        """更新NPC关系"""
+        """更新NPC关系，支持完整多维度数据结构"""
         if name not in self.npcs:
             self.npcs[name] = {
-                "relationship": 0,
+                "relationship": 0,        # 总体关系 (-100~100)
                 "attitude": "中立",
-                "known_secrets": []
+                "known_secrets": [],
+                # 多维度情感
+                "trust": 0,               # 信任度 (-100~100)
+                "fear": 0,                # 恐惧度 (-100~100)
+                "loyalty": 0,             # 忠诚度 (-100~100)
+                "affection": 0,           # 好感度 (-100~100)
+                "reputation": 0,          # 声誉 (-100~100)
+                # 交互历史
+                "interaction_count": 0,
+                "first_met_turn": self.turn_count,
+                "last_interaction_turn": self.turn_count,
+                "memories": [],           # [{"event": "", "turn": 0, "type": "positive/negative/neutral"}]
+                # 身份与状态
+                "tags": [],
+                "faction": "",
+                "location": "",
+                "status": "alive",        # alive/dead/missing/injured
+                "role": "",
+                "description": ""
             }
         self.npcs[name].update(kwargs)
+
+    def add_npc_memory(self, name: str, event: str, memory_type: str = "neutral"):
+        """为NPC添加记忆事件"""
+        if name not in self.npcs:
+            self.update_npc(name)
+        self.npcs[name]["memories"].append({
+            "event": event,
+            "turn": self.turn_count,
+            "type": memory_type,  # positive / negative / neutral
+            "timestamp": datetime.now().isoformat()
+        })
+        # 限制记忆数量，防止无限增长
+        if len(self.npcs[name]["memories"]) > 20:
+            self.npcs[name]["memories"] = self.npcs[name]["memories"][-20:]
+
+    def get_npc_summary(self, name: str) -> Dict:
+        """获取NPC格式化摘要"""
+        npc = self.npcs.get(name, {})
+        if not npc:
+            return {}
+        return {
+            "name": name,
+            "relationship": npc.get("relationship", 0),
+            "attitude": npc.get("attitude", "中立"),
+            "trust": npc.get("trust", 0),
+            "fear": npc.get("fear", 0),
+            "loyalty": npc.get("loyalty", 0),
+            "affection": npc.get("affection", 0),
+            "reputation": npc.get("reputation", 0),
+            "interaction_count": npc.get("interaction_count", 0),
+            "status": npc.get("status", "alive"),
+            "faction": npc.get("faction", ""),
+            "role": npc.get("role", ""),
+            "recent_memories": npc.get("memories", [])[-3:]
+        }
 
     def add_history(self, action: str, result: Dict):
         """添加历史记录"""
@@ -489,6 +542,35 @@ class GameState:
 
         # NPC
         state.npcs = data.get("npcs", {})
+        # 补全NPC缺失字段（v4.5.0+完整关系系统）
+        for name, npc in state.npcs.items():
+            if not isinstance(npc, dict):
+                state.npcs[name] = {"relationship": 0, "attitude": "中立", "known_secrets": []}
+                continue
+            defaults = {
+                "relationship": 0,
+                "attitude": "中立",
+                "known_secrets": [],
+                "trust": 0,
+                "fear": 0,
+                "loyalty": 0,
+                "affection": 0,
+                "reputation": 0,
+                "interaction_count": 0,
+                "first_met_turn": 0,
+                "last_interaction_turn": 0,
+                "memories": [],
+                "tags": [],
+                "faction": "",
+                "location": "",
+                "status": "alive",
+                "role": "",
+                "description": ""
+            }
+            for k, v in defaults.items():
+                if k not in npc:
+                    npc[k] = v
+
 
         # 历史与进度
         state.history = data.get("history", [])
@@ -772,7 +854,24 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
     "money_change": 0,
     "status_effects_added": [{{"id": "效果ID", "name": "效果名", "type": "buff/debuff", "duration": 3, "effects": {{"hp": 0, "attributes": {{"RESILIENCE": -2}}}}, "pause_hp_decay": false}}],
     "status_effects_removed": ["效果ID"],
-    "relationship_changes": {{"NPC名": 变化值}},
+    "relationship_changes": {{"NPC名": 变化值}},  # 向后兼容，新版推荐使用下方完整结构
+    "npc_relationship_changes": {{
+      "NPC名": {{
+        "relationship": 5,    # 总体关系变化
+        "trust": 3,           # 信任度变化
+        "fear": -2,           # 恐惧度变化
+        "loyalty": 2,         # 忠诚度变化
+        "affection": 1,       # 好感度变化
+        "reputation": 0,      # 声誉变化
+        "memories": [{{"event": "简短描述", "type": "positive/negative/neutral"}}],  # 新增记忆
+        "attitude": "可选：新态度",  # 仅在态度改变时填写
+        "faction": "可选：阵营",     # 仅在阵营改变时填写
+        "location": "可选：位置",     # 仅在位置改变时填写
+        "status": "可选：alive/dead/missing/injured",  # 仅在状态改变时填写
+        "tags": ["可选：新增标签"],
+        "known_secrets": ["可选：新增秘密"]
+      }}
+    }},
     "flags_set": {{"标志名": true}},
     "tags_gained": ["获得的标签"],
     "scene_change": "场景变化（如果有）"
@@ -1313,10 +1412,47 @@ class WorldlineSkill:
         for effect_id in consequences.get("status_effects_removed", []):
             self.state.remove_status_effect(effect_id)
 
-        # 关系变化
+        # 关系变化（向后兼容：旧版扁平结构）
         for npc, delta in consequences.get("relationship_changes", {}).items():
             current = self.state.npcs.get(npc, {}).get("relationship", 0)
             self.state.update_npc(npc, relationship=current + delta)
+            # 自动更新互动计数
+            ic = self.state.npcs[npc].get("interaction_count", 0) + 1
+            self.state.npcs[npc]["interaction_count"] = ic
+            self.state.npcs[npc]["last_interaction_turn"] = self.state.turn_count
+
+        # 完整NPC关系变化（新版多维结构）
+        for npc, changes in consequences.get("npc_relationship_changes", {}).items():
+            if not isinstance(changes, dict):
+                continue
+            self.state.update_npc(npc)  # 确保NPC存在
+            npc_data = self.state.npcs[npc]
+            # 更新各维度（变化量累加，限制在-100~100）
+            for dim in ["relationship", "trust", "fear", "loyalty", "affection", "reputation"]:
+                if dim in changes:
+                    new_val = max(-100, min(100, npc_data.get(dim, 0) + changes[dim]))
+                    npc_data[dim] = new_val
+            # 添加记忆
+            for mem in changes.get("memories", []):
+                if isinstance(mem, dict):
+                    mem.setdefault("turn", self.state.turn_count)
+                    npc_data["memories"].append(mem)
+            # 更新其他可选字段
+            for field in ["attitude", "faction", "location", "status", "role", "description"]:
+                if field in changes:
+                    npc_data[field] = changes[field]
+            for field in ["tags", "known_secrets"]:
+                if field in changes and isinstance(changes[field], list):
+                    # 合并列表，去重
+                    existing = set(npc_data.get(field, []))
+                    existing.update(changes[field])
+                    npc_data[field] = list(existing)
+            # 自动更新互动计数
+            npc_data["interaction_count"] = npc_data.get("interaction_count", 0) + 1
+            npc_data["last_interaction_turn"] = self.state.turn_count
+            # 记忆数量限制
+            if len(npc_data["memories"]) > 20:
+                npc_data["memories"] = npc_data["memories"][-20:]
 
         # 标志
         for flag, value in consequences.get("flags_set", {}).items():

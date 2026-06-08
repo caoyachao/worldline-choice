@@ -229,13 +229,16 @@ WorldlineSkill                    # 主控制器
 saves/
 └── game_{timestamp}_{world_setting}/
     ├── game.json          # 主存档（GameState 最新状态）
-    └── auto_turn_{N}_{ts}.json  # 自动存档
+    └── auto.json          # 自动存档（由引擎每回合自动写入）
 ```
+
+**注意**：`save_game()` 方法在写入前会向 `to_dict()` 结果中注入 `game_id` 字段（非 GameState 原生属性），用于加载时恢复目录上下文。
 
 结构为扁平字典，核心字段：
 ```json
 {
   "version": "4.5.0",
+  "game_id": "game_1780885435_武侠",
   "world_setting": "武侠",
   "world_description": "",
   "current_scene": "客栈大堂",
@@ -247,7 +250,30 @@ saves/
     "tags": [],
     "secrets": []
   },
-  "npcs": {"店小二": {"relationship": 10, "attitude": "友善"}},
+  "npcs": {
+    "店小二": {
+      "relationship": 10,        # 总体关系 (-100~100)
+      "attitude": "友善",
+      "known_secrets": [],
+      "trust": 15,               # 信任度 (-100~100)
+      "fear": 0,                 # 恐惧度 (-100~100)
+      "loyalty": 5,              # 忠诚度 (-100~100)
+      "affection": 8,            # 好感度 (-100~100)
+      "reputation": 10,          # 声誉 (-100~100)
+      "interaction_count": 3,    # 互动次数
+      "first_met_turn": 1,       # 首次相遇回合
+      "last_interaction_turn": 5, # 上次互动回合
+      "memories": [
+        {"event": "玩家给了小费", "turn": 1, "type": "positive"}
+      ],
+      "tags": ["客栈员工"],
+      "faction": "",
+      "location": "客栈大堂",
+      "status": "alive",
+      "role": "店小二",
+      "description": "热情的客栈伙计"
+    }
+  },
   "history": [...],
   "turn_count": 5,
   "flags": {},
@@ -257,6 +283,9 @@ saves/
   "status_effects": [],
   "attribute_history": {},
   "money_per_turn": -2,
+  "ending_triggered": false,     # 结局是否触发
+  "ending_type": "",             # 结局类型
+  "death_triggered": false,      # 死亡是否触发
   "active_benefits": [],
   "scene_objects": [],
   "npc_assist_log": []
@@ -267,11 +296,12 @@ saves/
 
 `worldline_engine.py` 中的 `_migrate_legacy_save()` 方法会自动处理：
 - 中文属性名映射到 6 大通用维度（武力→FORCE、智力→MIND 等）
-- 旧版 `npc_database` 扁平化为 `npcs`
+- 旧版 `npc_database` 扁平化为 `npcs`，并映射多维度情感（trust→信任、fear→恐惧、respect→忠诚/声誉）
 - 旧版 `story_flags` 合并到 `flags`
 - 历史记录从字典格式转为列表格式
 - 缺失属性补全为默认值 10
-- 补全 v4.5.0 新增字段（hp、resources、status_effects、attribute_history、money_per_turn）
+- 补全 v4.5.0 新增字段（hp、resources、status_effects、attribute_history、money_per_turn、death_triggered、ending_triggered/ending_type）
+- 补全 v4.5.0 NPC 完整关系字段（trust、fear、loyalty、affection、reputation、interaction_count、memories 等）
 
 ---
 

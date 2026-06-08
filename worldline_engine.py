@@ -94,7 +94,7 @@ class WorldlineEngine(WorldlineSkill):
         """
         recent_history = self.get_history_summary(limit=5)
         npcs_text = "\n".join(
-            f"- {name}: 关系{info.get('relationship', 0)}, 态度{info.get('attitude', '中立')}"
+            f"- {name}: 关系{info.get('relationship', 0)}, 态度{info.get('attitude', '中立')}, 信任{info.get('trust', 0)}, 恐惧{info.get('fear', 0)}, 忠诚{info.get('loyalty', 0)}"
             for name, info in self.state.npcs.items()
         ) if self.state.npcs else "暂无重要NPC"
 
@@ -190,6 +190,23 @@ class WorldlineEngine(WorldlineSkill):
                 data["attribute_history"] = {}
             if "death_triggered" not in data:
                 data["death_triggered"] = False
+            if "money_per_turn" not in data:
+                data["money_per_turn"] = 0
+            # 补全NPC缺失字段（v4.5.0+完整关系系统）
+            npcs = data.get("npcs", {})
+            for name, npc in npcs.items():
+                if not isinstance(npc, dict):
+                    npcs[name] = {"relationship": 0, "attitude": "中立", "known_secrets": []}
+                    npc = npcs[name]
+                defaults = {
+                    "relationship": 0, "attitude": "中立", "known_secrets": [],
+                    "trust": 0, "fear": 0, "loyalty": 0, "affection": 0, "reputation": 0,
+                    "interaction_count": 0, "first_met_turn": 0, "last_interaction_turn": 0, "memories": [],
+                    "tags": [], "faction": "", "location": "", "status": "alive", "role": "", "description": ""
+                }
+                for k, v in defaults.items():
+                    if k not in npc:
+                        npc[k] = v
             return data
 
         # 旧版 normally 在 "player" -> "attributes" 下可能是结构化 dict
@@ -245,14 +262,30 @@ class WorldlineEngine(WorldlineSkill):
             for npc_id, info in data["npc_database"].items():
                 name = info.get("basic_info", {}).get("name", npc_id)
                 matrix = info.get("relationship_matrix", {}).get("towards_player", {})
-                trust = matrix.get("trust", {}).get("value", 5)
+                trust_val = matrix.get("trust", {}).get("value", 5)
                 respect = matrix.get("respect", {}).get("value", 5)
-                fear = matrix.get("fear", {}).get("value", 0)
-                relationship = (trust - 5) * 10 + (respect - 5) * 5 - fear * 5
+                fear_val = matrix.get("fear", {}).get("value", 0)
+                relationship = (trust_val - 5) * 10 + (respect - 5) * 5 - fear_val * 5
                 npcs[name] = {
                     "relationship": relationship,
                     "attitude": info.get("current_state", {}).get("mood", "中立"),
                     "known_secrets": info.get("knowledge_state", {}).get("secrets_known_by_player", []),
+                    # 多维度情感映射
+                    "trust": (trust_val - 5) * 20,  # 5->0, 10->100, 0->-100
+                    "fear": fear_val * 20,  # 0->0, 5->100
+                    "loyalty": (respect - 5) * 20,
+                    "affection": (trust_val - 5) * 15,
+                    "reputation": (respect - 5) * 20,
+                    "interaction_count": 0,
+                    "first_met_turn": 0,
+                    "last_interaction_turn": 0,
+                    "memories": [],
+                    "tags": info.get("basic_info", {}).get("tags", []),
+                    "faction": info.get("basic_info", {}).get("faction", ""),
+                    "location": info.get("current_state", {}).get("location", ""),
+                    "status": "alive",
+                    "role": info.get("basic_info", {}).get("role", ""),
+                    "description": info.get("basic_info", {}).get("description", "")
                 }
             data["npcs"] = npcs
 
@@ -269,6 +302,23 @@ class WorldlineEngine(WorldlineSkill):
         data["status_effects"] = []
         data["attribute_history"] = {}
         data["death_triggered"] = False
+        data["money_per_turn"] = 0
+
+        # 补全NPC缺失字段（v4.5.0+完整关系系统）
+        npcs = data.get("npcs", {})
+        for name, npc in npcs.items():
+            if not isinstance(npc, dict):
+                npcs[name] = {"relationship": 0, "attitude": "中立", "known_secrets": []}
+                npc = npcs[name]
+            defaults = {
+                "relationship": 0, "attitude": "中立", "known_secrets": [],
+                "trust": 0, "fear": 0, "loyalty": 0, "affection": 0, "reputation": 0,
+                "interaction_count": 0, "first_met_turn": 0, "last_interaction_turn": 0, "memories": [],
+                "tags": [], "faction": "", "location": "", "status": "alive", "role": "", "description": ""
+            }
+            for k, v in defaults.items():
+                if k not in npc:
+                    npc[k] = v
 
         # 版本升级标记
         data["version"] = "4.5.0"
