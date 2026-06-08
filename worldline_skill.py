@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Worldline Choice - LLM驱动 + d20检定混合架构 (v4.4.1)
+Worldline Choice - LLM驱动 + d20检定混合架构 (v4.5.0)
 面向OpenClaw智能体和CLI的Skill实现
 
 核心设计：
 1. LLM负责：意图理解、DC评估、叙事生成（基于骰子结果）
 2. d20负责：客观判定（成功/失败程度）- 必须通过execute_check工具执行
-3. 引擎负责：状态管理、规则执行、强制骰子结果不可被LLM覆盖
+3. 引擎负责：状态管理、规则执行、强制骰子结果不可被LLM覆盖、强制自动保存
+4. 角色成长（v4.5.0）：回合结算、属性升级、HP/资源/背包/状态效果
 """
 
 import json
@@ -197,7 +198,13 @@ class D20Engine:
 class GameState:
     """精简版游戏状态，专注核心数据"""
 
-    VERSION = "4.4.1"
+    VERSION = "4.5.0"
+
+    # 属性上限
+    ATTRIBUTE_MAX = 50
+    ATTRIBUTE_MIN = 1
+    # 单轮属性变化上限
+    ATTRIBUTE_CHANGE_PER_TURN_MAX = 5
 
     def __init__(self):
         # 基础信息
@@ -217,7 +224,10 @@ class GameState:
                 "RESILIENCE": 10,
                 "LUCK": 10
             },
-            "items": [],
+            "inventory": {
+                "capacity": 20,
+                "items": []
+            },
             "tags": [],
             "secrets": []
         }
@@ -230,30 +240,165 @@ class GameState:
         self.turn_count: int = 0
         self.flags: Dict[str, Any] = {}
 
+        # 角色成长系统（v4.5.0）
+        self.hp: int = 100
+        self.max_hp: int = 100
+        self.resources: Dict[str, int] = {}  # 财务/资源
+        self.status_effects: List[Dict] = []  # 状态效果
+        self.attribute_history: Dict[str, List[Dict]] = {}  # 属性成长审计
+
         # 战术增强系统（v4.3.0）：前置准备 + NPC协助 + 场景互动
         self.active_benefits: List[Dict] = []    # 当前可用的战术加成
         self.scene_objects: List[Dict] = []      # 场景中的可互动物体
         self.npc_assist_log: List[Dict] = []     # NPC协助历史记录
 
-        # 结局
+        # 结局与死亡
         self.ending_triggered: bool = False
         self.ending_type: str = ""
+        self.death_triggered: bool = False
 
-    def update_attribute(self, attr: str, delta: int):
-        """更新属性"""
-        if attr in self.player["attributes"]:
-            current = self.player["attributes"][attr]
-            self.player["attributes"][attr] = max(1, min(20, current + delta))
+    def update_attribute(self, attr: str, delta: int, reason: str = ""):
+        """更新属性，带成长审计"""
+        if attr not in self.player["attributes"]:
+            return
 
-    def add_item(self, item: str):
-        """添加物品"""
-        if item not in self.player["items"]:
-            self.player["items"].append(item)
+        # 硬截断：单轮变化上限
+        if abs(delta) > self.ATTRIBUTE_CHANGE_PER_TURN_MAX:
+            delta = self.ATTRIBUTE_CHANGE_PER_TURN_MAX if delta > 0 else -self.ATTRIBUTE_CHANGE_PER_TURN_MAX
 
-    def remove_item(self, item: str):
-        """移除物品"""
-        if item in self.player["items"]:
-            self.player["items"].remove(item)
+        current = self.player["attributes"][attr]
+        new_val = max(self.ATTRIBUTE_MIN, min(self.ATTRIBUTE_MAX, current + delta))
+        actual_delta = new_val - current
+        self.player["attributes"][attr] = new_val
+
+        # 记录成长历史
+        if actual_delta != 0:
+            if attr not in self.attribute_history:
+                self.attribute_history[attr] = []
+            self.attribute_history[attr].append({
+                "change": actual_delta,
+                "reason": reason or "未说明",
+                "turn": self.turn_count,
+                "timestamp": datetime.now().isoformat()
+            })
+
+    def get_attribute_history(self, attr: str) -> List[Dict]:
+        """获取某属性的成长历史"""
+        return [h.copy() for h in self.attribute_history.get(attr, [])]
+
+    def add_item(self, item: Any):
+        """添加物品（兼容旧版字符串和新版字典）"""
+        if isinstance(item, dict):
+            self.add_inventory_item(item)
+        else:
+            self.add_inventory_item({
+                "id": str(item),
+                "name": str(item),
+                "type": "consumable",
+                "quantity": 1,
+                "description": f"物品：{item}"
+            })
+
+    def remove_item(self, item: Any):
+        """移除物品（兼容旧版字符串和新版字典）"""
+        if isinstance(item, dict):
+            self.remove_inventory_item(item.get("id", item.get("name", "")))
+        else:
+            self.remove_inventory_item(str(item))
+
+    def add_inventory_item(self, item: Dict) -> bool:
+        """添加物品到背包"""
+        inv = self.player["inventory"]
+        items = inv.get("items", [])
+        capacity = inv.get("capacity", 20)
+
+        # 检查容量
+        if len(items) >= capacity:
+            return False
+
+        # 如果已有同ID物品且是消耗品，合并数量
+        item_id = item.get("id") or item.get("name", "")
+        for existing in items:
+            existing_id = existing.get("id") or existing.get("name", "")
+            if existing_id == item_id and existing.get("type") == "consumable" and item.get("type") == "consumable":
+                existing["quantity"] = existing.get("quantity", 1) + item.get("quantity", 1)
+                return True
+
+        items.append(item)
+        return True
+
+    def remove_inventory_item(self, item_id: str) -> bool:
+        """从背包移除物品"""
+        items = self.player["inventory"].get("items", [])
+        for i, item in enumerate(items):
+            if (item.get("id") == item_id) or (item.get("name") == item_id):
+                items.pop(i)
+                return True
+        return False
+
+    def use_inventory_item(self, item_id: str) -> Optional[Dict]:
+        """使用消耗品"""
+        items = self.player["inventory"].get("items", [])
+        for item in items:
+            if (item.get("id") == item_id) or (item.get("name") == item_id):
+                if item.get("type") != "consumable":
+                    return None
+                qty = item.get("quantity", 1)
+                if qty <= 0:
+                    return None
+                item["quantity"] = qty - 1
+                if item["quantity"] <= 0:
+                    items.remove(item)
+                return item.get("effects", {})
+        return None
+
+    def add_status_effect(self, effect: Dict):
+        """添加状态效果"""
+        self.status_effects.append(effect)
+
+    def remove_status_effect(self, effect_id: str) -> bool:
+        """移除状态效果"""
+        for i, se in enumerate(self.status_effects):
+            if se.get("id") == effect_id:
+                self.status_effects.pop(i)
+                return True
+        return False
+
+    def tick_status_effects(self) -> Dict:
+        """
+        状态效果 Tick 衰减
+        返回被移除的效果列表
+        """
+        remaining = []
+        ticked = []
+        for se in self.status_effects:
+            dur = se.get("duration", 0)
+            if dur > 0:
+                se["duration"] = dur - 1
+                if se["duration"] > 0:
+                    remaining.append(se)
+                else:
+                    ticked.append(se.get("id", ""))
+            elif dur == -1:
+                # 持续到场景结束
+                remaining.append(se)
+            else:
+                # duration == 0 或无效，直接移除
+                ticked.append(se.get("id", ""))
+        self.status_effects = remaining
+        return {"ticked": [t for t in ticked if t]}
+
+    def update_resource(self, name: str, delta: int) -> int:
+        """更新资源，不允许负值"""
+        current = self.resources.get(name, 0)
+        after = max(0, current + delta)
+        self.resources[name] = after
+        return after
+
+    def update_hp(self, delta: int) -> int:
+        """更新HP，限制在 [0, max_hp]"""
+        self.hp = max(0, min(self.max_hp, self.hp + delta))
+        return self.hp
 
     def update_npc(self, name: str, **kwargs):
         """更新NPC关系"""
@@ -284,11 +429,17 @@ class GameState:
             "current_scene": self.current_scene,
             "player": self.player,
             "npcs": self.npcs,
-            "history": self.history[-50:],  # 只保留最近50条
+            "history": self.history,
             "turn_count": self.turn_count,
             "flags": self.flags,
+            "hp": self.hp,
+            "max_hp": self.max_hp,
+            "resources": self.resources,
+            "status_effects": self.status_effects,
+            "attribute_history": self.attribute_history,
             "ending_triggered": self.ending_triggered,
             "ending_type": self.ending_type,
+            "death_triggered": self.death_triggered,
             "active_benefits": self.active_benefits,
             "scene_objects": self.scene_objects,
             "npc_assist_log": self.npc_assist_log,
@@ -296,21 +447,67 @@ class GameState:
 
     @classmethod
     def from_dict(cls, data: Dict) -> "GameState":
-        """反序列化"""
+        """反序列化，兼容旧版存档"""
         state = cls()
+
+        # 基础信息
         state.world_setting = data.get("world_setting", "")
         state.world_description = data.get("world_description", "")
         state.current_scene = data.get("current_scene", "")
-        state.player = data.get("player", state.player)
+
+        # 玩家状态兼容迁移
+        player = data.get("player", {})
+        state.player["name"] = player.get("name", "")
+        state.player["role"] = player.get("role", "")
+        state.player["attributes"] = player.get("attributes", state.player["attributes"])
+        state.player["tags"] = player.get("tags", [])
+        state.player["secrets"] = player.get("secrets", [])
+
+        # 背包兼容迁移：旧版 items 是字符串列表，新版是 inventory 结构
+        if "inventory" in player:
+            state.player["inventory"] = player["inventory"]
+        elif "items" in player:
+            old_items = player["items"]
+            if isinstance(old_items, list) and len(old_items) > 0 and isinstance(old_items[0], str):
+                # 旧版字符串列表，迁移为简单物品
+                state.player["inventory"]["items"] = [
+                    {
+                        "id": item,
+                        "name": item,
+                        "type": "consumable",
+                        "quantity": 1,
+                        "description": f"物品：{item}"
+                    }
+                    for item in old_items
+                ]
+            else:
+                state.player["inventory"]["items"] = old_items if isinstance(old_items, list) else []
+
+        # NPC
         state.npcs = data.get("npcs", {})
+
+        # 历史与进度
         state.history = data.get("history", [])
         state.turn_count = data.get("turn_count", 0)
         state.flags = data.get("flags", {})
-        state.ending_triggered = data.get("ending_triggered", False)
-        state.ending_type = data.get("ending_type", "")
+
+        # 角色成长系统（v4.5.0 新增字段，旧版缺失时补全）
+        state.hp = data.get("hp", 100)
+        state.max_hp = data.get("max_hp", 100)
+        state.resources = data.get("resources", {})
+        state.status_effects = data.get("status_effects", [])
+        state.attribute_history = data.get("attribute_history", {})
+
+        # 战术增强
         state.active_benefits = data.get("active_benefits", [])
         state.scene_objects = data.get("scene_objects", [])
         state.npc_assist_log = data.get("npc_assist_log", [])
+
+        # 结局与死亡
+        state.ending_triggered = data.get("ending_triggered", False)
+        state.ending_type = data.get("ending_type", "")
+        state.death_triggered = data.get("death_triggered", False)
+
         return state
 
 
@@ -405,6 +602,7 @@ class LLMDriver:
 
     def _build_analysis_prompt(self, action: str, state: GameState) -> str:
         """构建行动分析Prompt"""
+        inv_names = [it.get("name", it.get("id", "未知")) for it in state.player["inventory"].get("items", [])]
         return f"""你是一个公正的TRPG游戏主持人。你的任务是分析玩家的行动意图，设定检定参数，但**不决定成败**。
 
 【当前游戏状态】
@@ -412,7 +610,10 @@ class LLMDriver:
 场景: {state.current_scene}
 玩家: {state.player['name']} ({state.player['role']})
 属性: {json.dumps(state.player['attributes'], ensure_ascii=False)}
-持有物品: {', '.join(state.player['items']) or '无'}
+持有物品: {', '.join(inv_names) or '无'}
+HP: {state.hp}/{state.max_hp}
+资源: {json.dumps(state.resources, ensure_ascii=False) or '无'}
+状态效果: {', '.join(se.get('name', se.get('id', '')) for se in state.status_effects) or '无'}
 
 【玩家输入】
 {action}
@@ -457,7 +658,7 @@ class LLMDriver:
 
 上一回合检定: {previous_result.get('check', {}).get('degree', '未知')}
 """
-
+        inv_names = [it.get("name", it.get("id", "未知")) for it in state.player["inventory"].get("items", [])]
         return f"""你是一个游戏主持人，为玩家提供有意义的行动选择。
 
 【当前游戏状态】
@@ -465,7 +666,8 @@ class LLMDriver:
 场景: {state.current_scene}
 玩家: {state.player['name']} ({state.player['role']})
 属性: {json.dumps(state.player['attributes'], ensure_ascii=False)}
-持有物品: {', '.join(state.player['items']) or '无'}
+持有物品: {', '.join(inv_names) or '无'}
+HP: {state.hp}/{state.max_hp}
 当前回合: {state.turn_count + 1}
 {prev_narrative}
 
@@ -557,8 +759,13 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
   "narrative": "剧情描述（200-300字），必须符合骰子结果的程度",
   "consequences": {{
     "attribute_changes": {{"属性名": 变化值}},
-    "items_gained": ["获得的物品"],
-    "items_lost": ["失去的物品"],
+    "attribute_change_reasons": {{"属性名": "变化原因"}},
+    "items_gained": [{{"id": "物品ID", "name": "物品名", "type": "consumable", "quantity": 1}}],
+    "items_lost": ["失去的物品ID或名称"],
+    "hp_change": 0,
+    "resource_changes": {{"资源名": 变化值}},
+    "status_effects_added": [{{"id": "效果ID", "name": "效果名", "type": "buff/debuff", "duration": 3, "effects": {{"hp": 0, "attributes": {{"RESILIENCE": -2}}}}, "pause_hp_decay": false}}],
+    "status_effects_removed": ["效果ID"],
     "relationship_changes": {{"NPC名": 变化值}},
     "flags_set": {{"标志名": true}},
     "tags_gained": ["获得的标签"],
@@ -590,6 +797,7 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
 
 4. **状态变更必须与叙事一致**：如果叙事中说"受伤了", consequences中要有相应体现
 5. **不要编造**：所有状态变更必须基于叙事中实际发生的事件
+6. **属性变化单轮绝对值不超过5**：如果叙事暗示属性变化超过5，引擎会自动截断
 
 【验证检查清单】
 生成叙事前确认：
@@ -784,8 +992,13 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
             "narrative": templates.get(degree, "行动结束。"),
             "consequences": {
                 "attribute_changes": {},
+                "attribute_change_reasons": {},
                 "items_gained": [],
                 "items_lost": [],
+                "hp_change": 0,
+                "resource_changes": {},
+                "status_effects_added": [],
+                "status_effects_removed": [],
                 "relationship_changes": {},
                 "flags_set": {},
                 "tags_gained": [],
@@ -814,10 +1027,17 @@ class WorldlineSkill:
         self.state = GameState()
         self.d20 = D20Engine()
         self.llm = LLMDriver(llm_callback)
+        self.game_id: Optional[str] = None
         self.save_dir = "./saves"
         self.auto_save = auto_save
         self.show_dice = show_dice
         os.makedirs(self.save_dir, exist_ok=True)
+
+    def _get_game_save_dir(self) -> str:
+        """获取当前游戏的存档目录"""
+        if not self.game_id:
+            return self.save_dir
+        return os.path.join(self.save_dir, self.game_id)
 
     def start_game(
         self,
@@ -838,11 +1058,31 @@ class WorldlineSkill:
         for attr in self.state.player["attributes"]:
             self.state.player["attributes"][attr] = random.randint(8, 16)
 
+        # 初始化默认值
+        self.state.hp = 100
+        self.state.max_hp = 100
+        self.state.resources = {}
+        self.state.status_effects = []
+        self.state.attribute_history = {}
+
+        # 生成游戏ID
+        timestamp = int(datetime.now().timestamp())
+        safe_world = "".join(c for c in world_setting if c.isalnum() or c in "_-")
+        self.game_id = f"game_{timestamp}_{safe_world}"
+
+        # 创建游戏目录
+        game_dir = self._get_game_save_dir()
+        os.makedirs(game_dir, exist_ok=True)
+
+        # 保存初始存档
+        self.save_game("game")
+
         return {
             "initialized": True,
             "world": world_setting,
             "player": self.state.player,
-            "scene": self.state.current_scene
+            "scene": self.state.current_scene,
+            "game_id": self.game_id
         }
 
     def process_turn(
@@ -860,17 +1100,29 @@ class WorldlineSkill:
         2. d20投骰 → 客观结果（支持外部DC修正和优势/劣势）
         3. LLM生成叙事（基于骰子结果）
         4. 应用状态变更
+        5. 回合结算（程序化）
         """
         if not self.state.world_setting:
             return {"error": "游戏未初始化，请先调用start_game"}
+
+        # 死亡检测
+        if self.state.death_triggered:
+            return {
+                "turn": self.state.turn_count + 1,
+                "action": player_input,
+                "error": "角色已死亡，无法继续行动",
+                "death_triggered": True
+            }
 
         # Step 1: LLM分析意图
         analysis = self.llm.analyze_action(player_input, self.state)
 
         # 检查前置条件（物品、知识）
+        inv_items = self.state.player["inventory"].get("items", [])
+        inv_names = [it.get("name", it.get("id", "")) for it in inv_items]
         missing_items = [
             item for item in analysis.required_items
-            if item not in self.state.player["items"]
+            if item not in inv_names
         ]
 
         if missing_items:
@@ -910,6 +1162,9 @@ class WorldlineSkill:
         # Step 4: 应用状态变更
         self._apply_consequences(narrative_result.get("consequences", {}))
 
+        # Step 4.5: 回合结算
+        settlement = self.settle_turn()
+
         # 记录历史
         turn_result = {
             "turn": self.state.turn_count + 1,
@@ -917,7 +1172,8 @@ class WorldlineSkill:
             "intention": analysis.intention,
             "narrative": narrative_result.get("narrative", ""),
             "consequences": narrative_result.get("consequences", {}),
-            "ending_triggered": narrative_result.get("ending_triggered", False)
+            "ending_triggered": narrative_result.get("ending_triggered", False),
+            "settlement": settlement
         }
 
         # 根据配置决定是否显示骰子结果
@@ -1012,15 +1268,31 @@ class WorldlineSkill:
 
     def _apply_consequences(self, consequences: Dict):
         """应用状态变更"""
-        # 属性变化
+        # 属性变化（带reason）
         for attr, delta in consequences.get("attribute_changes", {}).items():
-            self.state.update_attribute(attr, delta)
+            reason = consequences.get("attribute_change_reasons", {}).get(attr, "")
+            self.state.update_attribute(attr, delta, reason)
 
         # 物品变化
         for item in consequences.get("items_gained", []):
             self.state.add_item(item)
         for item in consequences.get("items_lost", []):
             self.state.remove_item(item)
+
+        # HP 变化
+        hp_delta = consequences.get("hp_change", 0)
+        if hp_delta != 0:
+            self.state.update_hp(hp_delta)
+
+        # 资源变化
+        for res_name, delta in consequences.get("resource_changes", {}).items():
+            self.state.update_resource(res_name, delta)
+
+        # 状态效果变化
+        for effect in consequences.get("status_effects_added", []):
+            self.state.add_status_effect(effect)
+        for effect_id in consequences.get("status_effects_removed", []):
+            self.state.remove_status_effect(effect_id)
 
         # 关系变化
         for npc, delta in consequences.get("relationship_changes", {}).items():
@@ -1035,6 +1307,75 @@ class WorldlineSkill:
         scene_change = consequences.get("scene_change", "")
         if scene_change:
             self.state.current_scene = scene_change
+
+    def settle_turn(self) -> Dict:
+        """
+        回合结算（程序化，不受LLM影响）
+        四阶段：自动修正 -> tick衰减 -> 体质联动HP -> 死亡检测
+        """
+        warnings = []
+
+        # 阶段1: 自动修正计算（先应用当前所有效果，再tick）
+        auto_modifiers = {"attributes": {}, "hp": 0}
+        effective_attributes = dict(self.state.player["attributes"])
+
+        pause_hp_decay = False
+        for se in self.state.status_effects:
+            effects = se.get("effects", {})
+            # 属性修正
+            for attr, delta in effects.get("attributes", {}).items():
+                auto_modifiers["attributes"][attr] = auto_modifiers["attributes"].get(attr, 0) + delta
+                if attr in effective_attributes:
+                    effective_attributes[attr] = max(1, min(50, effective_attributes[attr] + delta))
+            # HP修正
+            hp_delta = effects.get("hp", 0)
+            if hp_delta:
+                auto_modifiers["hp"] += hp_delta
+                self.state.update_hp(hp_delta)
+            # 暂停HP衰减
+            if se.get("pause_hp_decay"):
+                pause_hp_decay = True
+
+        # 装备品修正（仅计算effective_attributes，不修改存档）
+        for item in self.state.player["inventory"].get("items", []):
+            if item.get("type") == "equipment":
+                eq_effects = item.get("effects", {})
+                for attr, delta in eq_effects.get("attributes", {}).items():
+                    auto_modifiers["attributes"][attr] = auto_modifiers["attributes"].get(attr, 0) + delta
+                    if attr in effective_attributes:
+                        effective_attributes[attr] = max(1, min(50, effective_attributes[attr] + delta))
+
+        # 阶段2: 状态Tick衰减
+        tick_result = self.state.tick_status_effects()
+        ticked_ids = tick_result.get("ticked", [])
+
+        # 阶段3: 体质联动HP规则
+        auto_hp_change = 0
+        if not pause_hp_decay:
+            res_val = self.state.player["attributes"].get("RESILIENCE", 10)
+            if res_val >= 15:
+                auto_hp_change = 1
+                self.state.update_hp(1)
+            elif res_val <= 5:
+                auto_hp_change = -1
+                self.state.update_hp(-1)
+
+        # 阶段4: 死亡检测
+        death_triggered = False
+        if self.state.hp <= 0:
+            self.state.hp = 0
+            self.state.death_triggered = True
+            death_triggered = True
+            warnings.append("生命值归零，角色已死亡")
+
+        return {
+            "ticked_effects": ticked_ids,
+            "auto_modifiers": auto_modifiers,
+            "auto_hp_change": auto_hp_change,
+            "effective_attributes": effective_attributes,
+            "death_triggered": death_triggered,
+            "warnings": warnings
+        }
 
     # ------------------------------------------------------------------
     # 战术增强系统（v4.3.0）
@@ -1219,20 +1560,53 @@ class WorldlineSkill:
 
     def save_game(self, save_id: str) -> str:
         """保存游戏"""
-        filepath = os.path.join(self.save_dir, f"{save_id}.json")
+        game_dir = self._get_game_save_dir()
+        os.makedirs(game_dir, exist_ok=True)
+        filepath = os.path.join(game_dir, f"{save_id}.json")
+        data = self.state.to_dict()
+        data["game_id"] = self.game_id  # 注入 game_id
         with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(self.state.to_dict(), f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
         return filepath
 
     def load_game(self, save_id: str) -> bool:
         """加载游戏"""
-        filepath = os.path.join(self.save_dir, f"{save_id}.json")
+        game_dir = self._get_game_save_dir()
+        filepath = os.path.join(game_dir, f"{save_id}.json")
         if not os.path.exists(filepath):
             return False
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
             self.state = GameState.from_dict(data)
+            # 如果存档中有 game_id，恢复它
+            if "game_id" in data:
+                self.game_id = data["game_id"]
         return True
+
+    @staticmethod
+    def list_games(save_dir: str = "./saves") -> List[Dict]:
+        """列出所有游戏目录"""
+        games = []
+        if not os.path.exists(save_dir):
+            return games
+        for name in os.listdir(save_dir):
+            path = os.path.join(save_dir, name)
+            if os.path.isdir(path):
+                game_json = os.path.join(path, "game.json")
+                if os.path.exists(game_json):
+                    try:
+                        with open(game_json, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        games.append({
+                            "game_id": name,
+                            "world_setting": data.get("world_setting", ""),
+                            "player_name": data.get("player", {}).get("name", ""),
+                            "turn_count": data.get("turn_count", 0),
+                            "path": path
+                        })
+                    except Exception:
+                        pass
+        return games
 
     def get_state(self) -> Dict:
         """获取当前状态"""
@@ -1268,15 +1642,17 @@ def cli_main():
 
     result = skill.start_game(world, role, name)
     print(f"\n游戏开始: {result['world']}")
+    print(f"游戏ID: {result['game_id']}")
     print(f"属性: {result['player']['attributes']}")
 
     previous_result = None
 
     # 游戏循环
-    while not skill.state.ending_triggered:
+    while not skill.state.ending_triggered and not skill.state.death_triggered:
         print(f"\n{'='*50}")
         print(f"场景: {skill.state.current_scene}")
         print(f"回合 {skill.state.turn_count + 1}")
+        print(f"HP: {skill.state.hp}/{skill.state.max_hp}")
         print("-"*50)
 
         # 生成选项
@@ -1340,6 +1716,17 @@ def cli_main():
             print(f"\n【结果】{result.get('degree', '未知')}")
         print(f"\n【剧情】")
         print(result['narrative'])
+
+        # 显示结算信息
+        settlement = result.get('settlement', {})
+        if settlement.get('auto_hp_change') != 0:
+            print(f"\n【结算】HP自动变化: {settlement['auto_hp_change']:+d} (当前: {skill.state.hp}/{skill.state.max_hp})")
+        if settlement.get('ticked_effects'):
+            print(f"【结算】状态效果消退: {', '.join(settlement['ticked_effects'])}")
+        if settlement.get('death_triggered'):
+            print(f"\n{'='*50}")
+            print("角色已死亡。")
+            break
 
         # 保存结果供下回合使用
         previous_result = result

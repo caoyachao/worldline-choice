@@ -58,19 +58,69 @@ def test_game_state():
     state.player["name"] = "测试者"
     state.player["attributes"]["FORCE"] = 15
 
-    # 测试属性更新
+    # 测试属性更新（v4.5.0：上限50，带历史审计）
+    state.player["attributes"]["FORCE"] = 15
     state.update_attribute("FORCE", 3)
     assert state.player["attributes"]["FORCE"] == 18
-    state.update_attribute("FORCE", 5)  # 超过上限会被截断
-    assert state.player["attributes"]["FORCE"] == 20
-    print("✓ 属性更新正确（有边界限制）")
+    state.update_attribute("FORCE", 5)
+    assert state.player["attributes"]["FORCE"] == 23
+    # 测试上限50
+    state.player["attributes"]["FORCE"] = 48
+    state.update_attribute("FORCE", 5)
+    assert state.player["attributes"]["FORCE"] == 50  # 上限截断
+    state.update_attribute("FORCE", 5)
+    assert state.player["attributes"]["FORCE"] == 50  # 保持上限
+    # 测试下限1
+    state.player["attributes"]["FORCE"] = 2
+    state.update_attribute("FORCE", -5)
+    assert state.player["attributes"]["FORCE"] == 1  # 下限截断
+    state.update_attribute("FORCE", -5)
+    assert state.player["attributes"]["FORCE"] == 1  # 保持下限
+    print("✓ 属性更新正确（上限50，有边界限制）")
 
-    # 测试物品管理
+    # 测试属性历史审计
+    state.update_attribute("MIND", 2, reason="灵光一闪")
+    history = state.get_attribute_history("MIND")
+    assert len(history) > 0
+    assert history[-1]["change"] == 2
+    assert history[-1]["reason"] == "灵光一闪"
+    print("✓ 属性成长审计正确")
+
+    # 测试物品管理（新版inventory）
     state.add_item("测试剑")
-    assert "测试剑" in state.player["items"]
+    assert any(it.get("name") == "测试剑" for it in state.player["inventory"]["items"])
     state.remove_item("测试剑")
-    assert "测试剑" not in state.player["items"]
+    assert not any(it.get("name") == "测试剑" for it in state.player["inventory"]["items"])
     print("✓ 物品管理正确")
+
+    # 测试背包容量和字典物品
+    state.add_inventory_item({"id": "药草", "name": "药草", "type": "consumable", "quantity": 2})
+    assert state.use_inventory_item("药草") is not None
+    print("✓ 背包系统正确")
+
+    # 测试HP
+    state.update_hp(-20)
+    assert state.hp == 80
+    state.update_hp(200)
+    assert state.hp == 100  # 上限截断
+    print("✓ HP管理正确")
+
+    # 测试资源
+    state.update_resource("金币", 50)
+    assert state.resources["金币"] == 50
+    state.update_resource("金币", -100)
+    assert state.resources["金币"] == 0  # 不允许负值
+    print("✓ 资源管理正确")
+
+    # 测试状态效果
+    state.add_status_effect({"id": "中毒", "name": "中毒", "duration": 2, "effects": {"hp": -5}})
+    assert len(state.status_effects) == 1
+    tick = state.tick_status_effects()
+    assert len(state.status_effects) == 1  # 还剩1轮
+    tick2 = state.tick_status_effects()
+    assert len(state.status_effects) == 0  # 已消退
+    assert "中毒" in tick2.get("ticked", [])
+    print("✓ 状态效果管理正确")
 
     # 测试NPC关系
     state.update_npc("村长", relationship=20)
@@ -87,7 +137,31 @@ def test_game_state():
     new_state = GameState.from_dict(data)
     assert new_state.world_setting == "测试世界"
     assert new_state.player["name"] == "测试者"
+    assert new_state.hp == 100  # 因为之前 update_hp(200) 被截断到上限
+    assert new_state.resources.get("金币") == 0
+    assert len(new_state.player["inventory"]["items"]) == 1
     print("✓ 序列化/反序列化正确")
+
+    # 测试旧版存档兼容迁移
+    legacy_data = {
+        "version": "4.4.1",
+        "world_setting": "武侠",
+        "player": {
+            "name": "李逍遥",
+            "role": "剑客",
+            "attributes": {"FORCE": 12, "MIND": 14},
+            "items": ["长剑", "酒壶"],
+            "tags": [],
+            "secrets": []
+        },
+        "history": [],
+        "turn_count": 0,
+        "flags": {}
+    }
+    migrated = GameState.from_dict(legacy_data)
+    assert migrated.player["inventory"]["items"][0]["name"] == "长剑"
+    assert migrated.hp == 100  # 补全默认值
+    print("✓ 旧版存档兼容迁移正确")
 
     print("✓ 游戏状态管理测试通过\n")
 
@@ -119,20 +193,27 @@ def test_skill_integration():
         assert turn["turn"] == i + 2
     print("✓ 多回合处理正确")
 
-    # 测试存档
+    # 测试存档（v4.5.0：游戏目录隔离）
     save_path = skill.save_game("test_save")
     assert os.path.exists(save_path)
-    print("✓ 存档功能正确")
+    assert skill.game_id in save_path
+    print(f"✓ 存档功能正确（路径: {save_path}）")
 
     # 测试读档
     new_skill = WorldlineSkill()
+    # 需要手动设置 game_id 才能加载
+    new_skill.game_id = skill.game_id
     assert new_skill.load_game("test_save")
     assert new_skill.state.world_setting == "赛博朋克"
     assert new_skill.state.turn_count == 4
     print("✓ 读档功能正确")
 
     # 清理
-    os.remove(save_path)
+    import shutil
+    game_dir = os.path.join(skill.save_dir, skill.game_id)
+    if os.path.exists(game_dir):
+        shutil.rmtree(game_dir)
+    print("✓ 存档隔离正确")
 
     print("✓ Skill集成测试通过\n")
 
@@ -331,6 +412,169 @@ def test_openclaw_options():
     print("✓ OpenClaw选项接口测试通过\n")
 
 
+def test_growth_system():
+    """测试角色成长系统（v4.5.0）"""
+    print("="*60)
+    print("测试9: 角色成长系统")
+    print("="*60)
+
+    skill = WorldlineSkill(show_dice=True)
+    skill.start_game("武侠", "剑客", "李逍遥")
+
+    # 测试初始状态
+    assert skill.state.hp == 100
+    assert skill.state.max_hp == 100
+    assert skill.state.resources == {}
+    assert skill.state.attribute_history == {}
+    print("✓ 初始状态正确")
+
+    # 测试属性升级（带截断）
+    base_force = skill.state.player["attributes"]["FORCE"]
+    skill.state.update_attribute("FORCE", 3, "战斗训练")
+    assert skill.state.player["attributes"]["FORCE"] == base_force + 3
+    assert len(skill.state.get_attribute_history("FORCE")) == 1
+    print("✓ 属性升级正确")
+
+    # 测试单轮上限截断
+    base_mind = skill.state.player["attributes"]["MIND"]
+    skill.state.update_attribute("MIND", 10, "过度升级")
+    # 实际只增加5（上限截断）
+    assert skill.state.player["attributes"]["MIND"] == base_mind + 5
+    print("✓ 单轮变化上限截断正确")
+
+    # 测试上限50
+    skill.state.player["attributes"]["LUCK"] = 10
+    for _ in range(20):
+        skill.state.update_attribute("LUCK", 5, "刷属性")
+    assert skill.state.player["attributes"]["LUCK"] == 50
+    print("✓ 属性上限50正确")
+
+    # 测试死亡检测
+    skill.state.hp = 5
+    skill.state.death_triggered = False
+    # 施加一个致命状态
+    skill.state.add_status_effect({"id": "致命伤", "duration": 1, "effects": {"hp": -10}})
+    settlement = skill.settle_turn()
+    assert settlement["death_triggered"] == True
+    assert skill.state.death_triggered == True
+    assert skill.state.hp == 0
+    print("✓ 死亡检测正确")
+
+    print("✓ 角色成长系统测试通过\n")
+
+
+def test_settlement():
+    """测试回合结算机制（v4.5.0）"""
+    print("="*60)
+    print("测试10: 回合结算机制")
+    print("="*60)
+
+    skill = WorldlineSkill(show_dice=True)
+    skill.start_game("武侠", "剑客", "测试者")
+
+    # 测试状态效果tick
+    skill.state.add_status_effect({"id": "疲惫", "duration": 2, "effects": {"attributes": {"FORCE": -2}}})
+    skill.state.add_status_effect({"id": "激励", "duration": 1, "effects": {"attributes": {"MIND": 3}}})
+    settlement1 = skill.settle_turn()
+    assert "激励" in settlement1.get("ticked_effects", [])
+    assert "疲惫" not in settlement1.get("ticked_effects", [])
+    assert len(skill.state.status_effects) == 1
+    print("✓ 状态效果tick正确")
+
+    # 测试第二回合：疲惫消退
+    settlement2 = skill.settle_turn()
+    assert "疲惫" in settlement2.get("ticked_effects", [])
+    assert len(skill.state.status_effects) == 0
+    print("✓ 状态效果完全消退正确")
+
+    # 测试体质联动HP
+    skill.state.hp = 50
+    skill.state.player["attributes"]["RESILIENCE"] = 16
+    settlement3 = skill.settle_turn()
+    assert settlement3["auto_hp_change"] == 1
+    assert skill.state.hp == 51
+    print("✓ 高体质HP恢复正确")
+
+    skill.state.player["attributes"]["RESILIENCE"] = 4
+    settlement4 = skill.settle_turn()
+    assert settlement4["auto_hp_change"] == -1
+    assert skill.state.hp == 50
+    print("✓ 低体质HP衰减正确")
+
+    # 测试暂停HP衰减
+    skill.state.add_status_effect({"id": "护盾", "duration": 1, "effects": {}, "pause_hp_decay": True})
+    settlement5 = skill.settle_turn()
+    assert settlement5["auto_hp_change"] == 0
+    print("✓ 暂停HP衰减正确")
+
+    # 测试effective_attributes
+    skill.state.player["attributes"]["FORCE"] = 10
+    skill.state.add_status_effect({"id": "狂暴", "duration": 1, "effects": {"attributes": {"FORCE": 5}}})
+    settlement6 = skill.settle_turn()
+    assert settlement6["effective_attributes"]["FORCE"] == 15
+    print("✓ 有效属性计算正确")
+
+    print("✓ 回合结算机制测试通过\n")
+
+
+def test_directory_isolation():
+    """测试游戏目录隔离（v4.5.0）"""
+    print("="*60)
+    print("测试11: 游戏目录隔离")
+    print("="*60)
+
+    import shutil
+
+    # 创建两个游戏
+    skill1 = WorldlineSkill()
+    skill1.start_game("武侠", "剑客", "玩家1")
+    skill1.save_game("game")
+    skill1.process_turn("测试行动")
+
+    skill2 = WorldlineSkill()
+    skill2.start_game("科幻", "宇航员", "玩家2")
+    skill2.save_game("game")
+    skill2.process_turn("探索星球")
+
+    # 验证目录存在
+    assert skill1.game_id is not None
+    assert skill2.game_id is not None
+    assert skill1.game_id != skill2.game_id
+    print(f"✓ 游戏ID生成正确: {skill1.game_id}, {skill2.game_id}")
+
+    # 验证目录结构
+    dir1 = os.path.join(skill1.save_dir, skill1.game_id)
+    dir2 = os.path.join(skill2.save_dir, skill2.game_id)
+    assert os.path.isdir(dir1)
+    assert os.path.isdir(dir2)
+    assert os.path.exists(os.path.join(dir1, "game.json"))
+    assert os.path.exists(os.path.join(dir2, "game.json"))
+    print("✓ 游戏目录结构正确")
+
+    # 验证 list_games
+    games = WorldlineSkill.list_games(skill1.save_dir)
+    game_ids = [g["game_id"] for g in games]
+    assert skill1.game_id in game_ids
+    assert skill2.game_id in game_ids
+    print("✓ list_games 正确")
+
+    # 验证隔离性：读取 skill1 的存档不应影响 skill2
+    new_skill = WorldlineSkill()
+    new_skill.game_id = skill1.game_id
+    new_skill.load_game("game")
+    assert new_skill.state.world_setting == "武侠"
+    assert new_skill.state.player["name"] == "玩家1"
+    print("✓ 存档隔离正确")
+
+    # 清理
+    for skill in [skill1, skill2]:
+        d = os.path.join(skill.save_dir, skill.game_id)
+        if os.path.exists(d):
+            shutil.rmtree(d)
+
+    print("✓ 游戏目录隔离测试通过\n")
+
+
 def run_all_tests():
     """运行所有测试"""
     print("\n" + "="*60)
@@ -346,6 +590,9 @@ def run_all_tests():
         test_multi_world_settings()
         test_turn_options()
         test_openclaw_options()
+        test_growth_system()
+        test_settlement()
+        test_directory_isolation()
 
         print("="*60)
         print("✓ 所有测试通过!")

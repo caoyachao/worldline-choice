@@ -1,0 +1,32 @@
+name: worldline-choice
+version: 4.5.0
+description: AI驱动互动叙事游戏引擎 v4.5.0 - 角色成长版。支持LLM驱动的意图识别和d20客观检定，新增角色成长系统（HP/资源/背包/状态效果/属性升级）。
+author: Worldline Team
+license: MIT
+
+entry: worldline_skill.py
+runtime: python3
+
+scripts:
+  main: worldline_skill.py
+
+commands:
+  - name: worldline
+    description: Start a Worldline Choice game session
+    script: worldline_skill.py
+    args:
+      - name: world
+        flag: --world
+        description: Game world setting (e.g., cyberpunk, fantasy, historical)
+      - name: role
+        flag: --role
+        description: Player character role
+      - name: name
+        flag: --name
+        description: Player character name
+
+dependencies:
+  - python >= 3.8
+
+cache:
+  enabled: false

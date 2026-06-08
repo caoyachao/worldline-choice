@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Worldline Choice - 兼容入口层 (v4.4.1)
+Worldline Choice - 兼容入口层 (v4.5.0)
 
 本文件作为向后兼容的入口点，统一代理到 worldline_skill.py 的核心实现。
 确保 agent / CLI / 旧代码都能使用到内建的 d20 检定系统。
@@ -9,11 +9,13 @@ Worldline Choice - 兼容入口层 (v4.4.1)
 1. WorldlineEngine 继承自 WorldlineSkill，默认 show_dice=True，透明暴露 d20 结果。
 2. 兼容旧版 API 签名（如 get_system_prompt / process_action 等映射到新接口）。
 3. 旧版存档格式可通过 _migrate_legacy_save() 自动迁移到新版 flat GameState。
+4. v4.5.0 新增：角色成长系统、回合结算、游戏目录隔离。
 """
 
 import json
 import os
 import sys
+from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 # 从新版 skill 导入全部公开接口
@@ -49,10 +51,6 @@ class WorldlineEngine(WorldlineSkill):
         self.save_dir = os.path.expanduser("~/.claude/skills/worldline_choice/saves")
         os.makedirs(self.save_dir, exist_ok=True)
 
-    # ------------------------------------------------------------------
-    # 旧版 API 兼容映射
-    # ------------------------------------------------------------------
-
     def initialize_world(
         self,
         world_setting: str,
@@ -71,6 +69,21 @@ class WorldlineEngine(WorldlineSkill):
         # 使用新版随机属性生成逻辑
         for attr in self.state.player["attributes"]:
             self.state.player["attributes"][attr] = D20Engine.calculate_modifier(10) + 10
+
+        # 初始化 v4.5.0 新字段
+        self.state.hp = 100
+        self.state.max_hp = 100
+        self.state.resources = {}
+        self.state.status_effects = []
+        self.state.attribute_history = {}
+
+        # 生成游戏ID
+        timestamp = int(datetime.now().timestamp())
+        safe_world = "".join(c for c in world_setting if c.isalnum() or c in "_-")
+        self.game_id = f"game_{timestamp}_{safe_world}"
+        game_dir = self._get_game_save_dir()
+        os.makedirs(game_dir, exist_ok=True)
+
         return self.state
 
     def get_system_prompt(self) -> str:
@@ -85,6 +98,7 @@ class WorldlineEngine(WorldlineSkill):
             for name, info in self.state.npcs.items()
         ) if self.state.npcs else "暂无重要NPC"
 
+        inv_names = [it.get("name", it.get("id", "未知")) for it in self.state.player["inventory"].get("items", [])]
         return f"""你是《世界线·抉择》的叙事AI。这是一个基于"{self.state.world_setting}"世界观的互动叙事游戏。
 
 【核心规则 - 必须遵守】
@@ -101,7 +115,9 @@ class WorldlineEngine(WorldlineSkill):
 - 回合数: {self.state.turn_count}
 - 玩家角色: {self.state.player['name']} ({self.state.player['role']})
 - 玩家属性: {json.dumps(self.state.player['attributes'], ensure_ascii=False)}
-- 持有物品: {', '.join(self.state.player['items']) or '无'}
+- 持有物品: {', '.join(inv_names) or '无'}
+- HP: {self.state.hp}/{self.state.max_hp}
+- 资源: {json.dumps(self.state.resources, ensure_ascii=False) or '无'}
 - 性格标签: {', '.join(self.state.player['tags']) or '暂无'}
 - 知道的秘密: {', '.join(self.state.player['secrets']) or '暂无'}
 
@@ -140,7 +156,12 @@ class WorldlineEngine(WorldlineSkill):
 
     def load_game(self, save_id: str) -> bool:
         """加载存档，自动兼容旧版格式。"""
-        filepath = os.path.join(self.save_dir, f"{save_id}.json")
+        # 先尝试新版目录结构
+        game_dir = self._get_game_save_dir()
+        filepath = os.path.join(game_dir, f"{save_id}.json")
+        if not os.path.exists(filepath):
+            # 回退到旧版扁平结构
+            filepath = os.path.join(self.save_dir, f"{save_id}.json")
         if not os.path.exists(filepath):
             return False
         with open(filepath, "r", encoding="utf-8") as f:
@@ -148,13 +169,27 @@ class WorldlineEngine(WorldlineSkill):
         # 兼容旧版富结构存档 -> 新版扁平结构
         data = self._migrate_legacy_save(data)
         self.state = GameState.from_dict(data)
+        if "game_id" in data:
+            self.game_id = data["game_id"]
         return True
 
     @staticmethod
     def _migrate_legacy_save(data: Dict) -> Dict:
         """将旧版 v3.x 富结构存档转换为新版 v4.x 扁平结构。"""
-        # 如果已经是新版格式，直接返回
+        # 如果已经是新版格式，补全 v4.5.0 新增字段
         if data.get("version", "").startswith("4."):
+            if "hp" not in data:
+                data["hp"] = 100
+            if "max_hp" not in data:
+                data["max_hp"] = 100
+            if "resources" not in data:
+                data["resources"] = {}
+            if "status_effects" not in data:
+                data["status_effects"] = []
+            if "attribute_history" not in data:
+                data["attribute_history"] = {}
+            if "death_triggered" not in data:
+                data["death_triggered"] = False
             return data
 
         # 旧版 normally 在 "player" -> "attributes" 下可能是结构化 dict
@@ -191,9 +226,9 @@ class WorldlineEngine(WorldlineSkill):
             if dim not in migrated_attrs:
                 migrated_attrs[dim] = 10
 
-        # 限制在 1-20
+        # 限制在 1-50
         for k in migrated_attrs:
-            migrated_attrs[k] = max(1, min(20, int(migrated_attrs[k])))
+            migrated_attrs[k] = max(1, min(50, int(migrated_attrs[k])))
 
         player["attributes"] = migrated_attrs
 
@@ -227,8 +262,16 @@ class WorldlineEngine(WorldlineSkill):
             flags.update(data["story_flags"])
         data["flags"] = flags
 
+        # 补全 v4.5.0 新增字段
+        data["hp"] = 100
+        data["max_hp"] = 100
+        data["resources"] = {}
+        data["status_effects"] = []
+        data["attribute_history"] = {}
+        data["death_triggered"] = False
+
         # 版本升级标记
-        data["version"] = "4.4.1"
+        data["version"] = "4.5.0"
         return data
 
     # ------------------------------------------------------------------
@@ -305,9 +348,10 @@ class GameCLI:
             result = self.engine.start_game(world, role, name)
             print(f"\n{'='*50}")
             print(f"游戏开始: {result['world']}")
+            print(f"游戏ID: {result['game_id']}")
             print(f"角色: {name} ({role})")
             print(f"属性: {json.dumps(result['player']['attributes'], ensure_ascii=False)}")
-            print(f"\n新版引擎已启用 d20 检定系统。")
+            print(f"\n新版引擎已启用 d20 检定系统 + 角色成长系统(v4.5.0)。")
             print(f"现在可以使用 process_turn() 或 generate_turn_options() 继续游戏。")
 
         elif command in ("--load", "-l"):
@@ -317,32 +361,38 @@ class GameCLI:
             save_id = args[1]
             if self.engine.load_game(save_id):
                 print(f"已加载存档: {save_id}")
+                print(f"当前游戏ID: {self.engine.game_id}")
                 print(f"当前回合: {self.engine.state.turn_count}")
             else:
                 print(f"存档不存在: {save_id}")
 
         elif command in ("--list", "-ls"):
-            saves = [
-                f.replace(".json", "")
-                for f in os.listdir(self.engine.save_dir)
-                if f.endswith(".json")
-            ]
-            if not saves:
+            games = self.engine.list_games(self.engine.save_dir)
+            if not games:
                 print("暂无存档")
                 return
-            for s in saves:
-                print(f"  {s}")
+            for g in games:
+                print(f"  {g['game_id']} | {g['world_setting']} | {g['player_name']} | 回合{g['turn_count']}")
 
         elif command in ("--delete", "-d"):
             if len(args) < 2:
-                print("错误: 请指定存档ID")
+                print("错误: 请指定存档ID或游戏ID")
                 return
-            filepath = os.path.join(self.engine.save_dir, f"{args[1]}.json")
+            target = args[1]
+            # 尝试删除游戏目录
+            game_dir = os.path.join(self.engine.save_dir, target)
+            if os.path.isdir(game_dir):
+                import shutil
+                shutil.rmtree(game_dir)
+                print(f"已删除游戏目录: {target}")
+                return
+            # 回退到删除单个文件
+            filepath = os.path.join(self.engine.save_dir, f"{target}.json")
             if os.path.exists(filepath):
                 os.remove(filepath)
-                print(f"已删除存档: {args[1]}")
+                print(f"已删除存档: {target}")
             else:
-                print(f"存档不存在: {args[1]}")
+                print(f"存档不存在: {target}")
 
         elif command in ("--help", "-h"):
             self.show_help()
@@ -362,8 +412,8 @@ Worldline Choice - d20 检定版游戏引擎
 命令:
   --new, -n [世界观] [角色] [名字]  开始新游戏
   --load, -l <存档ID>              加载存档
-  --list, -ls                      列出所有存档
-  --delete, -d <存档ID>            删除存档
+  --list, -ls                      列出所有游戏
+  --delete, -d <游戏ID/存档ID>     删除游戏或存档
   (无命令)                         启动交互式 CLI (带ABCDE选项 + d20检定)
         """)
 
