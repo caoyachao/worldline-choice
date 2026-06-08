@@ -247,6 +247,9 @@ class GameState:
         self.status_effects: List[Dict] = []  # 状态效果
         self.attribute_history: Dict[str, List[Dict]] = {}  # 属性成长审计
 
+        # 金钱系统（v4.5.0）：每回合基础金钱变化（正数=收入，负数=开销）
+        self.money_per_turn: int = 0
+
         # 战术增强系统（v4.3.0）：前置准备 + NPC协助 + 场景互动
         self.active_benefits: List[Dict] = []    # 当前可用的战术加成
         self.scene_objects: List[Dict] = []      # 场景中的可互动物体
@@ -437,6 +440,7 @@ class GameState:
             "resources": self.resources,
             "status_effects": self.status_effects,
             "attribute_history": self.attribute_history,
+            "money_per_turn": self.money_per_turn,
             "ending_triggered": self.ending_triggered,
             "ending_type": self.ending_type,
             "death_triggered": self.death_triggered,
@@ -497,6 +501,7 @@ class GameState:
         state.resources = data.get("resources", {})
         state.status_effects = data.get("status_effects", [])
         state.attribute_history = data.get("attribute_history", {})
+        state.money_per_turn = data.get("money_per_turn", 0)
 
         # 战术增强
         state.active_benefits = data.get("active_benefits", [])
@@ -764,6 +769,7 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
     "items_lost": ["失去的物品ID或名称"],
     "hp_change": 0,
     "resource_changes": {{"资源名": 变化值}},
+    "money_change": 0,
     "status_effects_added": [{{"id": "效果ID", "name": "效果名", "type": "buff/debuff", "duration": 3, "effects": {{"hp": 0, "attributes": {{"RESILIENCE": -2}}}}, "pause_hp_decay": false}}],
     "status_effects_removed": ["效果ID"],
     "relationship_changes": {{"NPC名": 变化值}},
@@ -798,6 +804,7 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
 4. **状态变更必须与叙事一致**：如果叙事中说"受伤了", consequences中要有相应体现
 5. **不要编造**：所有状态变更必须基于叙事中实际发生的事件
 6. **属性变化单轮绝对值不超过5**：如果叙事暗示属性变化超过5，引擎会自动截断
+7. **金钱结算**：如果叙事中涉及金钱交易（贿赂、购买、偷窃、获得报酬等），使用 `money_change` 字段。正值=获得，负值=消耗。每回合结束引擎会自动结算世界观基础金钱变化。
 
 【验证检查清单】
 生成叙事前确认：
@@ -1065,6 +1072,13 @@ class WorldlineSkill:
         self.state.status_effects = []
         self.state.attribute_history = {}
 
+        # 金钱系统：根据世界观设定初始金币和每回合金钱变化
+        self.state.money_per_turn = self._get_world_money_rate(world_setting)
+        # 初始金币：给世界观相关的启动资金
+        start_gold = self._get_world_start_gold(world_setting)
+        if start_gold > 0:
+            self.state.update_resource("金币", start_gold)
+
         # 生成游戏ID
         timestamp = int(datetime.now().timestamp())
         safe_world = "".join(c for c in world_setting if c.isalnum() or c in "_-")
@@ -1284,9 +1298,14 @@ class WorldlineSkill:
         if hp_delta != 0:
             self.state.update_hp(hp_delta)
 
-        # 资源变化
+        # 资源变化（通用）
         for res_name, delta in consequences.get("resource_changes", {}).items():
             self.state.update_resource(res_name, delta)
+
+        # 金钱变化（单次行动消耗/获得）
+        money_delta = consequences.get("money_change", 0)
+        if money_delta != 0:
+            self.state.update_resource("金币", money_delta)
 
         # 状态效果变化
         for effect in consequences.get("status_effects_added", []):
@@ -1311,7 +1330,7 @@ class WorldlineSkill:
     def settle_turn(self) -> Dict:
         """
         回合结算（程序化，不受LLM影响）
-        四阶段：自动修正 -> tick衰减 -> 体质联动HP -> 死亡检测
+        五阶段：自动修正 -> tick衰减 -> 体质联动HP -> 金钱结算 -> 死亡检测
         """
         warnings = []
 
@@ -1360,7 +1379,14 @@ class WorldlineSkill:
                 auto_hp_change = -1
                 self.state.update_hp(-1)
 
-        # 阶段4: 死亡检测
+        # 阶段4: 金钱结算（每回合强制执行）
+        money_before = self.state.resources.get("金币", 0)
+        money_change = self.state.money_per_turn
+        if money_change != 0:
+            self.state.update_resource("金币", money_change)
+        money_after = self.state.resources.get("金币", 0)
+
+        # 阶段5: 死亡检测
         death_triggered = False
         if self.state.hp <= 0:
             self.state.hp = 0
@@ -1373,6 +1399,9 @@ class WorldlineSkill:
             "auto_modifiers": auto_modifiers,
             "auto_hp_change": auto_hp_change,
             "effective_attributes": effective_attributes,
+            "money_change": money_change,
+            "money_before": money_before,
+            "money_after": money_after,
             "death_triggered": death_triggered,
             "warnings": warnings
         }
@@ -1558,6 +1587,52 @@ class WorldlineSkill:
             if b.get("remaining_uses", 0) > 0
         ]
 
+    def _get_world_money_rate(self, world_setting: str) -> int:
+        """
+        根据世界观返回每回合基础金钱变化。
+        正数 = 收入（工资、补贴、租金等）
+        负数 = 开销（生活费、住宿费、维护费等）
+        """
+        setting_lower = world_setting.lower()
+        if any(w in setting_lower for w in ["赛博", "科幻", "现代", "都市", "未来", "cyber", "sci-fi", "modern"]):
+            return 5
+        if any(w in setting_lower for w in ["太空", "space", "星际", "歌剧"]):
+            return 8
+        if any(w in setting_lower for w in ["谍战", "特工", "间谍", "spy"]):
+            return 6
+        if any(w in setting_lower for w in ["武侠", "古风", "古代", "江湖", "wuxia", "kungfu"]):
+            return -2
+        if any(w in setting_lower for w in ["黑帮", "mafia", "gang", "黑手"]):
+            return -3
+        if any(w in setting_lower for w in ["克苏鲁", "cthulhu", "调查"]):
+            return -1
+        if any(w in setting_lower for w in ["奇幻", "魔法", "fantasy", "magic"]):
+            return -1
+        if any(w in setting_lower for w in ["末日", "废土", "post-apocalyptic", "wasteland"]):
+            return -4
+        return 0
+
+    def _get_world_start_gold(self, world_setting: str) -> int:
+        """根据世界观返回初始金币数量"""
+        setting_lower = world_setting.lower()
+        if any(w in setting_lower for w in ["赛博", "科幻", "现代", "都市", "cyber", "sci-fi", "modern"]):
+            return 200
+        if any(w in setting_lower for w in ["太空", "space", "星际"]):
+            return 500
+        if any(w in setting_lower for w in ["谍战", "特工", "spy"]):
+            return 300
+        if any(w in setting_lower for w in ["武侠", "古风", "wuxia", "kungfu"]):
+            return 50
+        if any(w in setting_lower for w in ["黑帮", "mafia", "gang", "黑手"]):
+            return 100
+        if any(w in setting_lower for w in ["克苏鲁", "cthulhu", "调查"]):
+            return 80
+        if any(w in setting_lower for w in ["奇幻", "魔法", "fantasy", "magic"]):
+            return 60
+        if any(w in setting_lower for w in ["末日", "废土", "post-apocalyptic", "wasteland"]):
+            return 20
+        return 50
+
     def save_game(self, save_id: str) -> str:
         """保存游戏"""
         game_dir = self._get_game_save_dir()
@@ -1721,6 +1796,8 @@ def cli_main():
         settlement = result.get('settlement', {})
         if settlement.get('auto_hp_change') != 0:
             print(f"\n【结算】HP自动变化: {settlement['auto_hp_change']:+d} (当前: {skill.state.hp}/{skill.state.max_hp})")
+        if settlement.get('money_change') != 0:
+            print(f"【结算】金钱结算: {settlement['money_change']:+d} 金币 (当前: {skill.state.resources.get('金币', 0)})")
         if settlement.get('ticked_effects'):
             print(f"【结算】状态效果消退: {', '.join(settlement['ticked_effects'])}")
         if settlement.get('death_triggered'):
@@ -1739,3 +1816,4 @@ def cli_main():
 
 if __name__ == "__main__":
     cli_main()
+

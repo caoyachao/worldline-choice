@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Worldline Choice (世界线·抉择) is an AI-driven interactive narrative game engine using LLM + d20 check hybrid architecture.
 
-**Current Version**: 4.4.1 - Mandatory Auto-Save Edition
+**Current Version**: 4.5.0 - Character Growth Edition
 
 This is a pure-Python project with no external dependencies.
 
@@ -19,15 +19,23 @@ This is a pure-Python project with no external dependencies.
 - **List saves**: `python3 worldline_engine.py --list`
 - **Load save**: `python3 worldline_engine.py --load <save_id>`
 
-## Architecture (v4.4.1 - Mandatory Auto-Save)
+## Architecture (v4.5.0 - Character Growth)
 
 ### Core Design Philosophy
 
 **Separation of Concerns**:
 1. **LLM** handles: Intent understanding, DC assessment, narrative generation (based on dice results)
 2. **d20 engine** handles: Objective success/failure determination (mandatory via `execute_check`)
-3. **Game engine** handles: State management, rule enforcement, narrative validation
+3. **Game engine** handles: State management, rule enforcement, turn settlement (HP/money/status effects), narrative validation
 4. **Tactical system** handles: Preparation benefits, NPC assistance, scene object interactions
+
+**Character Growth System (v4.5.0)**:
+- HP system (0-100), death detection
+- Resources (gold, reputation, etc.) with per-turn settlement
+- Inventory with capacity limit (consumables/equipment/special items)
+- Status effects (buffs/debuffs) with tick decay
+- Attribute growth audit log (history of every change with reason)
+- Per-turn money settlement based on world setting
 
 **Mandatory d20 Check Principle**:
 - LLM **MUST** call `execute_check` tool to get dice results
@@ -37,11 +45,13 @@ This is a pure-Python project with no external dependencies.
 
 ### File Structure
 
-**`worldline_skill.py`** — Core skill implementation (v4.3.0):
-- `WorldlineSkill` — Main game controller with tactical enhancement APIs
+**`worldline_skill.py`** — Core skill implementation (v4.5.0):
+- `WorldlineSkill` — Main game controller with tactical enhancement APIs, turn settlement, character growth
 - `D20Engine` — Pure code dice rolling (no LLM involvement)
-- `GameState` — Game state with `active_benefits`, `scene_objects`, `npc_assist_log`
+- `GameState` — Game state with HP, resources, inventory, status effects, attribute history, money per turn
+- `LLMDriver` — Intent analysis, narrative generation, option generation
 - Tactical APIs: `set_scene_objects()`, `execute_npc_check()`, `add_active_benefit()`, `calculate_effective_dc()`
+- Growth APIs: `settle_turn()` (HP/status/money settlement), `update_attribute()` (with audit log)
 
 **`worldline_engine.py`** — Backward compatibility layer:
 - `WorldlineEngine` — Wraps `WorldlineSkill` with legacy API compatibility
@@ -158,7 +168,7 @@ adapter.start_game("赛博朋克", "黑客", "V")
 v4.3.0 format with tactical data:
 ```json
 {
-  "version": "4.4.1",
+  "version": "4.5.0",
   "world_setting": "武侠",
   "player": {
     "name": "李逍遥",

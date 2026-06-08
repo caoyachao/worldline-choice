@@ -1,7 +1,7 @@
 # AGENTS.md — Worldline Choice 开发指南
 
 > 本文件供 AI 编码智能体阅读。阅读者应当被假定为对项目一无所知。
-> 当前版本：v4.4.1 (强制自动保存版)
+> 当前版本：v4.5.0 (角色成长版)
 
 ---
 
@@ -11,7 +11,7 @@
 
 - **LLM** 负责：意图理解、DC 评估、基于骰子结果的叙事生成
 - **d20 引擎** 负责：客观判定行动成败（纯代码实现，不受 LLM 影响）
-- **游戏引擎** 负责：状态管理、规则执行、存档管理、强制自动保存
+- **游戏引擎** 负责：状态管理、规则执行、存档管理、强制自动保存、回合结算（HP/金钱/状态效果）
 
 本项目是一个**纯 Python 项目**，零外部依赖，仅使用 Python 标准库。面向 OpenClaw 智能体运行时和命令行 CLI 两种使用场景。
 
@@ -33,15 +33,13 @@
 
 ```
 .
-├── worldline_skill.py      # 核心实现（1354行）—— 主引擎、D20系统、GameState、LLMDriver
-├── worldline_engine.py     # 向后兼容入口（378行）—— 兼容层、旧版API映射、CLI参数解析
+├── worldline_skill.py      # 核心实现（~1800行）—— 主引擎、D20系统、GameState、LLMDriver、角色成长系统
+├── worldline_engine.py     # 向后兼容入口（~430行）—— 兼容层、旧版API映射、CLI参数解析
 ├── openclaw_adapter.py     # OpenClaw 适配器（276行）—— 封装为 OpenClaw 可调用的 Skill
-├── save_manager.py         # 旧版存档管理器（505行）—— v3.x 富结构存档格式，仍保留兼容
 ├── skill.json              # OpenClaw Skill 工具清单（定义所有可调用的工具/参数）
 ├── manifest.yaml           # OpenClaw 运行时清单（入口、命令、依赖声明）
-├── demo_game.py            # 演示脚本（91行）—— 展示 d20 强制检定 + 自动保存
-├── test_llm_skill.py       # 新版测试套件（369行）—— 测试 v4.x 架构
-├── test_engine.py          # 旧版测试脚本（633行）—— ⚠️ 已过时，大量方法在当前代码中不存在
+├── demo_game.py            # 演示脚本（91行）—— 展示 d20 强制检定 + 自动保存 + 回合结算
+├── test_llm_skill.py       # 新版测试套件（~600行）—— 测试 v4.x 架构
 ├── worldline_choice.sh     # Bash 启动脚本（默认启动 `worldline_skill.py`）
 ├── README.md               # 用户文档（中文）
 ├── SKILL.md                # 智能体主持手册（中文）—— Agent 行为规则与 API 速查
@@ -73,9 +71,6 @@ python3 worldline_engine.py --load save_001
 ```bash
 # 新版架构测试（推荐，当前维护中，全部通过）
 python3 test_llm_skill.py
-
-# 旧版兼容性测试（⚠️ 已严重过时，运行会失败）
-python3 test_engine.py
 ```
 
 ### 运行演示
@@ -101,9 +96,14 @@ D20Engine                         # 纯 d20 检定系统（完全客观）
   └─ execute_check()              # 执行检定（支持优势/劣势）
 
 GameState                         # 精简游戏状态
-  ├─ 玩家属性 / 物品 / 标签 / 秘密
+  ├─ 玩家属性 / 背包 / 标签 / 秘密
   ├─ NPC 关系（扁平结构）
   ├─ 历史记录（保留最近50条）
+  ├─ HP / 最大HP
+  ├─ 资源（金币、声望等）
+  ├─ 状态效果（Buff/Debuff）
+  ├─ 属性成长历史（审计日志）
+  ├─ 每回合金钱变化（money_per_turn）
   ├─ active_benefits（战术加成，v4.3.0）
   ├─ scene_objects（场景互动物体）
   └─ npc_assist_log（NPC 协助记录）
@@ -115,19 +115,21 @@ LLMDriver                         # LLM 驱动抽象层
   └─ 默认回退实现（无 LLM 时走关键词匹配）
 
 WorldlineSkill                    # 主控制器
-  ├─ start_game()                 # 初始化游戏
+  ├─ start_game()                 # 初始化游戏（含世界观金钱映射）
   ├─ process_turn()               # 处理回合（核心链路）
   ├─ generate_turn_options()      # 生成本回合选项
   ├─ process_option()             # 处理 A/B/C/D/E 选择
-  ├─ save_game() / load_game()    # 存档/读档
+  ├─ save_game() / load_game()    # 存档/读档（游戏目录隔离）
+  ├─ settle_turn()                # 回合结算（v4.5.0：HP/金钱/状态效果）
   ├─ 战术增强系统（v4.3.0）
   │   ├─ set_scene_objects()
   │   ├─ interact_with_scene_object()
   │   ├─ execute_npc_check()
   │   ├─ add_active_benefit()
   │   ├─ consume_active_benefit()
+  │   ├─ get_active_benefits()
   │   └─ calculate_effective_dc()
-  └─ 自动保存（v4.4.1，每回合强制执行）
+  └─ 自动保存（v4.4.1+，每回合强制执行）
 ```
 
 ### 5.2 兼容层（`worldline_engine.py`）
@@ -152,11 +154,13 @@ WorldlineSkill                    # 主控制器
   ↓
 5. LLM.generate_narrative()（基于骰子结果生成叙事）
   ↓
-6. 应用状态变更（_apply_consequences）
+6. 应用状态变更（_apply_consequences：属性/物品/HP/金钱/状态效果）
   ↓
-7. 记录历史 + 强制自动保存
+7. 回合结算（settle_turn：tick衰减→修正计算→体质联动→金钱结算→死亡检测）
   ↓
-返回 TurnResult（含 auto_save 字段）
+8. 记录历史 + 强制自动保存
+  ↓
+返回 TurnResult（含 auto_save + settlement 字段）
 ```
 
 ---
@@ -181,7 +185,7 @@ WorldlineSkill                    # 主控制器
 
 ### 6.4 版本号管理
 - `GameState.VERSION` 和 `skill.json` 中的 `version` 字段必须同步更新。
-- 当前版本号：**4.4.1**
+- 当前版本号：**4.5.0**
 
 ---
 
@@ -199,45 +203,39 @@ WorldlineSkill                    # 主控制器
 | `test_multi_world_settings()` | 多世界观通用性验证 |
 | `test_turn_options()` | ABCD + E 选项生成与选择处理 |
 | `test_openclaw_options()` | OpenClaw 接口的选项相关调用 |
+| `test_growth_system()` | 属性升级、上限50、成长审计、死亡检测 |
+| `test_settlement()` | 状态效果tick、体质联动HP、暂停衰减、有效属性 |
+| `test_directory_isolation()` | 游戏目录隔离、多游戏存档 |
 
 **运行方式：** `python3 test_llm_skill.py`
 **状态：** 全部通过 ✓
 
-### 7.2 已过时测试（`test_engine.py`）
-
-⚠️ **严重警告：** `test_engine.py` 引用大量在当前代码库中不存在的方法，包括但不限于：
-- `get_system_prompt()` / `get_action_prompt()` / `get_ending_prompt()`
-- `process_action()`
-- `list_saves()`
-- `raw_history` / `history_summaries` / `milestones`
-- `challenge_engine.execute_tactical_check()`
-- `update_world_state()` / `create_npc_rich()` / `update_npc_relationship_rich()`
-- `create_quest()` / `add_inventory_item()` / `set_story_flag()` / `add_session()` / `add_session_entry()`
-- `session_history` / `npc_database` / `active_quests` / `inventory` / `story_flags`
-
-**状态：** 运行即失败。该文件是 v3.x 时代的遗留物，未被更新以匹配 v4.x 的精简扁平架构。
-
-### 7.3 建议的测试增补方向
+### 7.2 建议的测试增补方向
 - 战术增强系统（`active_benefits` 的叠加与消耗）
 - 场景物体互动（`interact_with_scene_object`）
 - NPC 协助检定（`execute_npc_check`）
 - 存档迁移（v3.x → v4.x）
 - 自动保存异常处理
+- 金钱结算机制（世界观映射、每回合结算）
 
 ---
 
 ## 8. 存档格式与迁移
 
-### 8.1 当前存档格式（v4.4.1）
+### 8.1 当前存档格式（v4.5.0）
 
-存档以 JSON 文件保存，默认位置：
-- `worldline_skill.py` 内：`./saves/`
-- `worldline_engine.py` 内：`~/.claude/skills/worldline_choice/saves/`
+存档以 JSON 文件保存，按 `game_id` 隔离目录：
+```
+saves/
+└── game_{timestamp}_{world_setting}/
+    ├── game.json          # 主存档（GameState 最新状态）
+    └── auto_turn_{N}_{ts}.json  # 自动存档
+```
 
 结构为扁平字典，核心字段：
 ```json
 {
-  "version": "4.4.1",
+  "version": "4.5.0",
   "world_setting": "武侠",
   "world_description": "",
   "current_scene": "客栈大堂",
@@ -245,7 +243,7 @@ WorldlineSkill                    # 主控制器
     "name": "李逍遥",
     "role": "剑客",
     "attributes": {"FORCE": 12, "MIND": 14, ...},
-    "items": ["长剑"],
+    "inventory": {"capacity": 20, "items": [...]},
     "tags": [],
     "secrets": []
   },
@@ -253,6 +251,12 @@ WorldlineSkill                    # 主控制器
   "history": [...],
   "turn_count": 5,
   "flags": {},
+  "hp": 100,
+  "max_hp": 100,
+  "resources": {"金币": 50},
+  "status_effects": [],
+  "attribute_history": {},
+  "money_per_turn": -2,
   "active_benefits": [],
   "scene_objects": [],
   "npc_assist_log": []
@@ -267,6 +271,7 @@ WorldlineSkill                    # 主控制器
 - 旧版 `story_flags` 合并到 `flags`
 - 历史记录从字典格式转为列表格式
 - 缺失属性补全为默认值 10
+- 补全 v4.5.0 新增字段（hp、resources、status_effects、attribute_history、money_per_turn）
 
 ---
 
@@ -309,14 +314,19 @@ WorldlineSkill                    # 主控制器
 - `execute_check` 必须通过代码客观执行，结果通过 `CheckResult` 传递给叙事生成。
 - 叙事 Prompt 中包含严格的"红线"约束：禁止用转折词弱化失败、禁止给失败添加补偿收益。
 
-### 11.2 强制自动保存原则（v4.4.1）
+### 11.2 强制自动保存原则（v4.4.1+）
 - 每回合 `process_turn` 返回前，**引擎层强制执行**自动保存。
 - 返回结果中包含 `auto_save` 字段（`save_id`, `success`, `timestamp`, `filepath`）。
 - LLM 不应再主动提及"保存"行为，避免幻觉。
 
-### 11.3 存档修改须知
+### 11.3 角色成长系统（v4.5.0）
+- 回合结算 `settle_turn` 是程序化补充，不替代 d20 检定，叙事仍基于 `CheckResult`。
+- 属性升级单轮单项上限 ±5，上限 50，下限 1。所有变化记入 `attribute_history`。
+- 金钱结算每回合强制执行，世界观决定 `money_per_turn`（收入/开销）。
+- 死亡检测后 `death_triggered=True`，后续回合拒绝处理。
+
+### 11.4 存档修改须知
 - 修改 `GameState` 的字段时，必须同步更新 `to_dict()` 和 `from_dict()`。
-- 旧版 `save_manager.py` 中的 v3.x 富结构（`npc_database`, `session_history`, `inventory`, `active_quests` 等）在 `worldline_engine.py` 的 `_migrate_legacy_save()` 中被扁平化，但 `save_manager.py` 本身仍保留独立的 v3.x 逻辑。
 - 如果新增战术字段，需在 `GameState.__init__`、`to_dict()`、`from_dict()` 中同步添加。
 
 ---
@@ -325,12 +335,12 @@ WorldlineSkill                    # 主控制器
 
 | 版本 | 日期 | 核心变更 |
 |------|------|----------|
+| v4.5.0 | 2026-06-08 | 角色成长版。引入 HP/资源/背包/状态效果/属性历史审计；回合结算引擎（tick衰减→修正→体质联动→金钱结算→死亡检测）；游戏目录隔离；属性上限50；世界观金钱映射。 |
 | v4.4.1 | 2026-04-09 | 强制自动保存版。引擎层每回合强制自动保存。 |
 | v4.4.0 | 2026-04-07 | d20 强制检定版。`execute_check` 工具强制调用，禁止 LLM 脑补骰子。 |
 | v4.3.0 | 2026-04-04 | 战术增强版。引入 `active_benefits` 加成链机制（前置准备 + NPC 协作 + 环境互动）。 |
 | v4.2.0 | 2026-04-04 | `worldline_engine.py` 重写为兼容薄层，支持 v3.x 存档自动迁移。 |
 | v4.0.0 | 2026-04-01 | 架构革命。升级为 LLM + d20 混合架构，引入 ABCD+E 选项系统。 |
-| v3.x | 2026-03-30 | 纯代码驱动的多步骤战术检定系统（`save_manager.py` 和 `test_engine.py` 仍反映此时代架构）。 |
 
 ---
 
@@ -344,5 +354,5 @@ WorldlineSkill                    # 主控制器
 | 修改存档格式 | 同步更新 `GameState.to_dict()` / `from_dict()` + `worldline_engine.py` 的 `_migrate_legacy_save()`。 |
 | 修改选项生成逻辑 | 修改 `LLMDriver._build_options_prompt()` 和 `_default_options()`。 |
 | 修改叙事约束 | 修改 `LLMDriver._build_narrative_prompt()` — 这是约束 LLM 叙事行为的唯一位置。 |
-| 新增测试 | 写在 `test_llm_skill.py` 中，避免触碰 `test_engine.py`（已过时）。 |
+| 新增测试 | 写在 `test_llm_skill.py` 中。 |
 | 修改版本号 | 同步更新 `GameState.VERSION`、`skill.json` 中的 `version`、以及本文件顶部版本标记。 |

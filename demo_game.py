@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Worldline Choice v4.4.1 演示脚本
-展示强制d20检定 + 强制自动保存机制
+Worldline Choice v4.5.0 演示脚本
+展示 d20强制检定 + 自动保存 + 回合结算（HP/金钱/状态效果）
 """
 
 import json
@@ -13,7 +13,7 @@ from worldline_skill import WorldlineSkill
 
 def demo_game():
     print("="*60)
-    print("Worldline Choice v4.4.1 - d20强制检定 + 自动保存演示")
+    print("Worldline Choice v4.5.0 - d20强制检定 + 自动保存 + 回合结算演示")
     print("="*60)
 
     skill = WorldlineSkill()
@@ -25,6 +25,8 @@ def demo_game():
     print(f"世界观: {result['world']}")
     print(f"角色: {result['player']['name']} ({result['player']['role']})")
     print(f"属性: {result['player']['attributes']}")
+    print(f"初始金币: {skill.state.resources.get('金币', 0)}")
+    print(f"每回合金钱变化: {skill.state.money_per_turn:+d}")
 
     # 模拟几个回合
     actions = [
@@ -70,6 +72,15 @@ def demo_game():
             if consequences.get('tags_gained'):
                 print(f"   获得标签: {consequences['tags_gained']}")
 
+        # 展示结算信息
+        settlement = result.get('settlement', {})
+        if settlement.get('money_change') != 0:
+            print(f"💰 金钱结算: {settlement['money_change']:+d} 金币 (当前: {skill.state.resources.get('金币', 0)})")
+        if settlement.get('auto_hp_change') != 0:
+            print(f"❤️ HP自动变化: {settlement['auto_hp_change']:+d} (当前: {skill.state.hp}/{skill.state.max_hp})")
+        if settlement.get('ticked_effects'):
+            print(f"🌡️ 状态效果消退: {', '.join(settlement['ticked_effects'])}")
+
     # 展示存档
     print(f"\n{'='*60}")
     print("保存游戏...")
@@ -82,9 +93,11 @@ def demo_game():
     print(f"版本: {state.get('version', '未知')}")
     print(f"总回合数: {state.get('turn_count')}")
     print(f"历史记录数: {len(state.get('history', []))}")
+    print(f"当前金币: {state.get('resources', {}).get('金币', 0)}")
+    print(f"每回合金钱变化: {state.get('money_per_turn', 0):+d}")
 
     print(f"\n{'='*60}")
-    print("✓ 演示完成 - v4.4.1 d20强制检定 + 自动保存系统运行正常")
+    print("✓ 演示完成 - v4.5.0 d20强制检定 + 自动保存 + 回合结算系统运行正常")
     print("="*60)
 
 if __name__ == "__main__":
