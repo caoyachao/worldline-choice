@@ -154,24 +154,50 @@ class WorldlineEngine(WorldlineSkill):
         """
         return self.process_turn(player_input)
 
-    def load_game(self, save_id: str) -> bool:
+    def load_game(self, save_id: str = None) -> bool:
         """加载存档，自动兼容旧版格式。"""
-        # 先尝试新版目录结构
+        # 先尝试新版统一存档：game.json
         game_dir = self._get_game_save_dir()
-        filepath = os.path.join(game_dir, f"{save_id}.json")
-        if not os.path.exists(filepath):
-            # 回退到旧版扁平结构
-            filepath = os.path.join(self.save_dir, f"{save_id}.json")
-        if not os.path.exists(filepath):
-            return False
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # 兼容旧版富结构存档 -> 新版扁平结构
-        data = self._migrate_legacy_save(data)
-        self.state = GameState.from_dict(data)
-        if "game_id" in data:
-            self.game_id = data["game_id"]
-        return True
+        filepath = os.path.join(game_dir, "game.json")
+        
+        if os.path.exists(filepath):
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            # 新格式：包含 state 字段
+            if "state" in data:
+                data = self._migrate_legacy_save(data["state"])
+                self.state = GameState.from_dict(data)
+                if "game_id" in data:
+                    self.game_id = data["game_id"]
+                # 恢复NPC记忆
+                if "npc_memories" in data:
+                    self._restore_npc_memories(data["npc_memories"])
+                return True
+            else:
+                # 旧格式直接保存的game.json
+                data = self._migrate_legacy_save(data)
+                self.state = GameState.from_dict(data)
+                if "game_id" in data:
+                    self.game_id = data["game_id"]
+                return True
+        
+        # 回退到旧版按save_id加载
+        if save_id:
+            filepath = os.path.join(game_dir, f"{save_id}.json")
+            if not os.path.exists(filepath):
+                filepath = os.path.join(self.save_dir, f"{save_id}.json")
+            if not os.path.exists(filepath):
+                return False
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data = self._migrate_legacy_save(data)
+            self.state = GameState.from_dict(data)
+            if "game_id" in data:
+                self.game_id = data["game_id"]
+            return True
+        
+        return False
 
     @staticmethod
     def _migrate_legacy_save(data: Dict) -> Dict:

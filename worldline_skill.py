@@ -71,6 +71,8 @@ class NarrativeContext:
     world_setting: str          # 世界观
     scene_description: str      # 当前场景
     player_name: str
+    dc_value: int = 0           # 原始DC值
+    dc_level: str = ""          # DC等级：简单/中等/困难/极难
 
     def to_dict(self) -> Dict:
         return {
@@ -79,7 +81,9 @@ class NarrativeContext:
             "check_result": self.check_result.to_dict(),
             "world_setting": self.world_setting,
             "scene_description": self.scene_description,
-            "player_name": self.player_name
+            "player_name": self.player_name,
+            "dc_value": self.dc_value,
+            "dc_level": self.dc_level
         }
 
 
@@ -91,6 +95,9 @@ class TurnOption:
     action: str                 # 实际执行的行动（传给引擎）
     dc_hint: Optional[int] = None  # 可选的难度提示（用于UI显示）
     attr_hint: Optional[str] = None  # 可选的属性提示
+    dc_level: Optional[str] = None   # DC等级：简单/中等/困难/极难
+    reward_hint: Optional[str] = None  # 收益描述（如"少量金币"）
+    risk_hint: Optional[str] = None    # 风险描述
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -711,12 +718,43 @@ HP: {state.hp}/{state.max_hp}
   "intention": "玩家真实意图的简要描述",
   "action_type": "行动类型（如：战斗/社交/潜行/技术/魔法/探索）",
   "primary_attribute": "主属性（FORCE/MIND/INFLUENCE/REFLEX/RESILIENCE/LUCK之一）",
-  "base_dc": "建议的DC数值（5-25之间的整数）",
-  "dc_reasoning": "为什么设置这个DC的理由",
+  "base_dc": "建议的DC数值（2-17之间的整数，根据难度客观评估）",
+  "dc_reasoning": "为什么设置这个DC的理由，基于情境中的客观事实",
   "risks": ["失败可能发生的风险1", "风险2"],
   "required_items": ["需要的物品（如果有）"],
   "required_knowledge": ["需要的知识或能力（如果有）"]
 }}
+
+【DC评估标准 - 必须严格遵守】
+- DC 2-3: 极简单（走路、开门、正常说话、做日常熟悉的事）
+- DC 4-5: 简单（爬矮墙、说服朋友、做熟悉的事）
+- DC 6-7: 较简单（轻微跳跃、普通潜行、一般请求）
+- DC 8-10: 中等（说服陌生人、标准战斗、标准潜行）
+- DC 11-12: 较难（说服敌人、对抗训练有素的对手）
+- DC 13-15: 困难（击败强敌、潜入严密守卫区域、欺骗高手）
+- DC 16-17: 极难（近乎不可能的任务、对抗传说级敌人）
+- DC 18-25: 传奇（仅用于特殊剧情，非常罕见）
+
+【收益与风险对应 - 评估DC时必须考虑】
+- DC 2-7（简单）: 成功收益小，失败风险低
+- DC 8-12（中等）: 成功收益中等，失败风险中等
+- DC 13-17（困难）: 成功收益大，失败风险高
+
+【DC评估标准】
+- DC 2-3: 极简单（走路、开门、正常说话）
+- DC 4-5: 简单（爬矮墙、说服朋友、做熟悉的事）
+- DC 6-7: 较简单（轻微跳跃、普通潜行、一般请求）
+- DC 8-10: 中等（说服陌生人、标准战斗、标准潜行）
+- DC 11-12: 较难（说服敌人、对抗训练有素的对手）
+- DC 13-15: 困难（击败强敌、潜入严密守卫区域、欺骗高手）
+- DC 16-17: 极难（近乎不可能的任务、对抗传说级敌人）
+- DC 18-25: 传奇（仅用于特殊剧情，非常罕见）
+
+【收益与风险对应】
+- DC 2-7（简单）: 成功收益小，失败风险低
+- DC 8-12（中等）: 成功收益中等，失败风险中等
+- DC 13-17（困难）: 成功收益大，失败风险高
+- 高风险选项成功后收益必须显著高于低风险选项
 
 【重要约束 - 违反将导致机制失效】
 1. **只分析可行性，绝对不要预测骰子结果**：
@@ -790,7 +828,7 @@ HP: {state.hp}/{state.max_hp}
       "letter": "D",
       "description": "...",
       "action": "...",
-      "dc_hint": 18,
+      "dc_hint": 13,
       "attr_hint": "REFLEX"
     }}
   ],
@@ -807,12 +845,18 @@ HP: {state.hp}/{state.max_hp}
 5. **属性自然**: 属性使用应自然融入剧情，不要为了凑属性而硬塞
 6. **难度合理**: DC应由情境复杂度决定，不是人为设置
 
-【剧情化选项示例 - 不要照搬】
+【DC评估标准】
+- DC 2-7（简单）: 低风险低收益选项（如：安全路线、保守策略、日常对话）
+- DC 8-12（中等）: 标准风险标准收益选项（如：常规战斗、说服陌生人、一般潜行）
+- DC 13-17（困难）: 高风险高回报选项（如：挑战强敌、欺骗高手、潜入重兵把守区域）
+- 四个选项中应至少有1个简单（DC≤7）、1个中等（DC 8-10）、1个困难（DC 13+）
+
+【选项示例 - 不要照搬】
 场景：你发现受伤的敌人倒在路边
-A- "救他，可能获得情报但也可能暴露自己" (高风险高回报，INFLUENCE)
-B- "搜刮物资后离开，不管他的死活" (安全但可能有道德代价，MIND)
-C- "给他个痛快，结束他的痛苦" (残酷但确定，FORCE)
-D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
+A- "救他，可能获得情报但也可能暴露自己" (DC13, 高风险高回报，INFLUENCE)
+B- "搜刮物资后离开，不管他的死活" (DC7, 安全但可能有道德代价，MIND)
+C- "给他个痛快，结束他的痛苦" (DC9, 残酷但确定，FORCE)
+D- "藏起来观察，等他的同伴来" (DC8, 被动但信息丰富，REFLEX)
 
 【反例 - 避免这种】
 ❌ A- "用力量攻击" B- "用智力解谜" C- "用魅力说服" D- "用敏捷闪避"
@@ -904,6 +948,13 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
 5. **不要编造**：所有状态变更必须基于叙事中实际发生的事件
 6. **属性变化单轮绝对值不超过5**：如果叙事暗示属性变化超过5，引擎会自动截断
 7. **金钱结算**：如果叙事中涉及金钱交易（贿赂、购买、偷窃、获得报酬等），使用 `money_change` 字段。正值=获得，负值=消耗。每回合结束引擎会自动结算世界观基础金钱变化。
+8. **收益与DC必须严格对应**：
+   - 如果DC在2-7之间（简单），成功后收益应较小：少量金币（1-5）、轻微关系提升（1-3）、小型物品、一般信息
+   - 如果DC在8-12之间（中等），成功后收益应中等：属性提升（1-3）、有用物品（消耗品/装备）、重要信息、NPC关系+3-5
+   - 如果DC在13-17之间（困难），成功后收益应显著：大量金币（10-30）、强力装备、重大剧情推进、NPC关系+5-10、属性提升（2-5）
+   - 高风险高回报原则必须遵守：DC越高，成功后的consequences中正面变化应越大
+   - 大成功（≥10高出DC或骰出20）在上述基础上额外增加收益
+   - 勉强成功（≥0）虽然成功但应附带代价（HP下降、负面状态、物品损耗等）
 
 【验证检查清单】
 生成叙事前确认：
@@ -911,6 +962,7 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
 □ 叙事基调与结果程度一致
 □ 没有使用转折词弱化结果
 □ 状态变更有叙事支撑
+□ 收益大小与DC等级（{ctx.dc_level}，DC={ctx.dc_value}）一致
 """
 
     def _default_analysis(self, action: str, state: GameState) -> Dict:
@@ -924,20 +976,31 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
                 "intention": "进行战斗",
                 "action_type": "战斗",
                 "primary_attribute": "FORCE",
-                "base_dc": 15,
-                "dc_reasoning": "标准战斗难度",
+                "base_dc": 12,
+                "dc_reasoning": "标准战斗难度，中等",
                 "risks": ["受伤", "敌人警觉"],
                 "required_items": [],
                 "required_knowledge": []
             }
-        elif any(w in action_lower for w in ["说", "劝", "骗", "talk", "persuade"]):
+        elif any(w in action_lower for w in ["说", "劝", "骗", "talk"]):
             return {
                 "intention": "进行社交互动",
                 "action_type": "社交",
                 "primary_attribute": "INFLUENCE",
-                "base_dc": 12,
-                "dc_reasoning": "一般社交难度",
+                "base_dc": 7,
+                "dc_reasoning": "普通社交难度，较简单",
                 "risks": ["对方反感", "信息泄露"],
+                "required_items": [],
+                "required_knowledge": []
+            }
+        elif any(w in action_lower for w in ["说服", "欺骗", "persuade", "bribe", "convince", "intimidate"]):
+            return {
+                "intention": "进行高难度社交",
+                "action_type": "社交",
+                "primary_attribute": "INFLUENCE",
+                "base_dc": 10,
+                "dc_reasoning": "说服或欺骗他人，中等难度",
+                "risks": ["被识破", "反遭利用"],
                 "required_items": [],
                 "required_knowledge": []
             }
@@ -946,8 +1009,8 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
                 "intention": "进行潜行",
                 "action_type": "潜行",
                 "primary_attribute": "REFLEX",
-                "base_dc": 14,
-                "dc_reasoning": "潜行需要不被发现",
+                "base_dc": 11,
+                "dc_reasoning": "标准潜行难度，中等",
                 "risks": ["被发现", "陷入包围"],
                 "required_items": [],
                 "required_knowledge": []
@@ -957,8 +1020,8 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
                 "intention": "进行一般行动",
                 "action_type": "通用",
                 "primary_attribute": "MIND",
-                "base_dc": 10,
-                "dc_reasoning": "一般难度",
+                "base_dc": 7,
+                "dc_reasoning": "一般行动，较简单",
                 "risks": ["失败"],
                 "required_items": [],
                 "required_knowledge": []
@@ -975,28 +1038,28 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
                         "letter": "A",
                         "description": "握紧武器，大步走向声音来源",
                         "action": "毫不畏惧地走向声音来源，准备面对任何危险",
-                        "dc_hint": 14,
+                        "dc_hint": 12,
                         "attr_hint": "FORCE"
                     },
                     {
                         "letter": "B",
                         "description": "躲进阴影，先观察情况",
                         "action": "悄悄躲进附近的阴影中，仔细观察声音来源",
-                        "dc_hint": 12,
+                        "dc_hint": 7,
                         "attr_hint": "REFLEX"
                     },
                     {
                         "letter": "C",
                         "description": "大声喊话，试图交流",
                         "action": "朝声音方向喊话，表明自己没有敌意，试图沟通",
-                        "dc_hint": 15,
+                        "dc_hint": 9,
                         "attr_hint": "INFLUENCE"
                     },
                     {
                         "letter": "D",
                         "description": "分析环境，寻找其他路径",
                         "action": "冷静分析周围环境，寻找可以绕行的安全路径",
-                        "dc_hint": 13,
+                        "dc_hint": 8,
                         "attr_hint": "MIND"
                     }
                 ]
@@ -1008,28 +1071,28 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
                         "letter": "A",
                         "description": "坦诚相待，说出真实目的",
                         "action": "直视对方的眼睛，坦诚地说出自己的真实目的",
-                        "dc_hint": 14,
+                        "dc_hint": 9,
                         "attr_hint": "INFLUENCE"
                     },
                     {
                         "letter": "B",
                         "description": "编造谎言，试探对方反应",
                         "action": "编造一个半真半假的故事，观察对方的反应",
-                        "dc_hint": 16,
+                        "dc_hint": 12,
                         "attr_hint": "MIND"
                     },
                     {
                         "letter": "C",
                         "description": "保持沉默，让对方先开口",
                         "action": "冷冷地看着对方，一言不发，等待对方表明来意",
-                        "dc_hint": 13,
+                        "dc_hint": 8,
                         "attr_hint": "LUCK"
                     },
                     {
                         "letter": "D",
                         "description": "手按剑柄，警告对方不要挡路",
                         "action": "手按在武器上，用肢体语言表明自己不想惹事但也不怕事",
-                        "dc_hint": 15,
+                        "dc_hint": 11,
                         "attr_hint": "FORCE"
                     }
                 ]
@@ -1041,28 +1104,28 @@ D- "藏起来观察，等他的同伴来" (被动但信息丰富，REFLEX)
                         "letter": "A",
                         "description": "仔细搜查，不放过任何细节",
                         "action": "花时间仔细搜查现场，寻找所有可能的线索",
-                        "dc_hint": 12,
+                        "dc_hint": 7,
                         "attr_hint": "MIND"
                     },
                     {
                         "letter": "B",
                         "description": "拿上明显的东西就走",
                         "action": "只拿取最明显、最有价值的物品，尽快离开",
-                        "dc_hint": 14,
+                        "dc_hint": 10,
                         "attr_hint": "REFLEX"
                     },
                     {
                         "letter": "C",
                         "description": "设置陷阱，以防有人跟踪",
                         "action": "在离开前设置一个简单的警报陷阱，防止被跟踪",
-                        "dc_hint": 16,
+                        "dc_hint": 13,
                         "attr_hint": "MIND"
                     },
                     {
                         "letter": "D",
                         "description": "破坏现场，不留下痕迹",
                         "action": "故意破坏现场，让别人无法追踪你的行踪",
-                        "dc_hint": 15,
+                        "dc_hint": 11,
                         "attr_hint": "FORCE"
                     }
                 ]
@@ -1261,13 +1324,24 @@ class WorldlineSkill:
         )
 
         # Step 3: LLM生成叙事（基于骰子结果）
+        # 计算DC等级
+        dc_value = analysis.base_dc
+        dc_level = (
+            "简单" if dc_value <= 7 else
+            "中等" if dc_value <= 12 else
+            "困难" if dc_value <= 17 else
+            "极难"
+        )
+        
         narrative_ctx = NarrativeContext(
             action=player_input,
             intention=analysis.intention,
             check_result=check_result,
             world_setting=self.state.world_setting,
             scene_description=self.state.current_scene,
-            player_name=self.state.player["name"]
+            player_name=self.state.player["name"],
+            dc_value=dc_value,
+            dc_level=dc_level
         )
 
         narrative_result = self.llm.generate_narrative(narrative_ctx)
@@ -1304,21 +1378,19 @@ class WorldlineSkill:
             self.state.ending_triggered = True
             self.state.ending_type = narrative_result.get("ending_type", "")
 
-        # 强制自动存档（每回合结束时必然执行）
-        auto_save_info = {"save_id": None, "success": False, "timestamp": None, "error": None}
+        # 强制自动存档（每回合结束时更新game.json）
+        auto_save_info = {"filepath": None, "success": False, "timestamp": None, "error": None}
         if self.auto_save:
             try:
-                save_id = f"auto_turn_{self.state.turn_count}_{int(datetime.now().timestamp())}"
-                filepath = self.save_game(save_id)
+                filepath = self.save_game()
                 auto_save_info = {
-                    "save_id": save_id,
+                    "filepath": filepath,
                     "success": True,
-                    "timestamp": datetime.now().isoformat(),
-                    "filepath": filepath
+                    "timestamp": datetime.now().isoformat()
                 }
             except Exception as e:
                 auto_save_info = {
-                    "save_id": None,
+                    "filepath": None,
                     "success": False,
                     "timestamp": datetime.now().isoformat(),
                     "error": str(e)
@@ -1769,30 +1841,153 @@ class WorldlineSkill:
             return 20
         return 50
 
-    def save_game(self, save_id: str) -> str:
-        """保存游戏"""
+    def save_game(self, save_id: str = None) -> str:
+        """保存游戏（更新game.json，包含事件历史和NPC记忆）"""
         game_dir = self._get_game_save_dir()
         os.makedirs(game_dir, exist_ok=True)
-        filepath = os.path.join(game_dir, f"{save_id}.json")
-        data = self.state.to_dict()
-        data["game_id"] = self.game_id  # 注入 game_id
+        
+        # 如果传入了旧式save_id，仍然兼容旧行为（保存到指定文件名）
+        if save_id:
+            filepath = os.path.join(game_dir, f"{save_id}.json")
+            data = self.state.to_dict()
+            data["game_id"] = self.game_id
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return filepath
+        
+        # 新格式：统一保存到game.json
+        filepath = os.path.join(game_dir, "game.json")
+        
+        # 构建存档内容
+        state_data = self.state.to_dict()
+        state_data["game_id"] = self.game_id
+        
+        save_data = {
+            "game_id": self.game_id,
+            "version": self.state.VERSION,
+            "state": state_data,
+            "events": self._build_event_history(),
+            "npc_memories": self._build_npc_memory_snapshot(),
+            "saved_at": datetime.now().isoformat()
+        }
+        
         with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(save_data, f, ensure_ascii=False, indent=2)
         return filepath
 
-    def load_game(self, save_id: str) -> bool:
-        """加载游戏"""
+    def _build_event_history(self) -> List[Dict]:
+        """构建事件历史（最近10条详细 + 压缩的旧事件）"""
+        history = self.state.history
+        
+        if len(history) <= 10:
+            # 全部保持详细
+            return [self._event_to_detailed(h) for h in history]
+        
+        # 最近10条详细
+        recent = history[-10:]
+        detailed = [self._event_to_detailed(h) for h in recent]
+        
+        # 更早的事件压缩（每5条压缩成1条）
+        older = history[:-10]
+        compressed = []
+        for i in range(0, len(older), 5):
+            batch = older[i:i+5]
+            compressed.append(self._compress_event_batch(batch))
+        
+        return compressed + detailed
+
+    def _event_to_detailed(self, h: Dict) -> Dict:
+        """将history条目转换为详细事件格式"""
+        result = h.get("result", {})
+        degree = ""
+        if self.show_dice:
+            check = result.get("check", {})
+            degree = check.get("degree", "") if isinstance(check, dict) else ""
+        else:
+            degree = result.get("degree", "")
+        
+        return {
+            "type": "detailed",
+            "turn": h["turn"],
+            "action": h["action"],
+            "summary": result.get("narrative", "")[:100],
+            "degree": degree
+        }
+
+    def _compress_event_batch(self, batch: List[Dict]) -> Dict:
+        """将一批事件压缩为摘要"""
+        turns = [h["turn"] for h in batch]
+        actions = [h["action"] for h in batch]
+        
+        # 回退压缩：生成基础摘要
+        action_summary = ", ".join(actions[:3])
+        if len(actions) > 3:
+            action_summary += f" 等{len(actions)}次行动"
+        
+        summary = f"回合{min(turns)}-{max(turns)}：{action_summary}"
+        
+        return {
+            "type": "compressed",
+            "turns_covered": turns,
+            "summary": summary
+        }
+
+    def _build_npc_memory_snapshot(self) -> Dict:
+        """构建NPC记忆快照"""
+        snapshot = {}
+        for name, npc in self.state.npcs.items():
+            snapshot[name] = {
+                "memories": npc.get("memories", []),
+                "last_updated_turn": self.state.turn_count
+            }
+        return snapshot
+
+    def load_game(self, save_id: str = None) -> bool:
+        """加载游戏（支持旧版save_id和新版game.json）"""
         game_dir = self._get_game_save_dir()
-        filepath = os.path.join(game_dir, f"{save_id}.json")
+        
+        # 先尝试新格式：game.json
+        filepath = os.path.join(game_dir, "game.json")
         if not os.path.exists(filepath):
-            return False
+            # 回退到旧格式：按save_id加载
+            if save_id:
+                filepath = os.path.join(game_dir, f"{save_id}.json")
+                if not os.path.exists(filepath):
+                    return False
+            else:
+                return False
+        
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            self.state = GameState.from_dict(data)
-            # 如果存档中有 game_id，恢复它
+        
+        # 新格式：包含 state / events / npc_memories
+        if "state" in data:
+            self.state = GameState.from_dict(data["state"])
             if "game_id" in data:
                 self.game_id = data["game_id"]
+            # 恢复NPC记忆（如果state中缺失，从npc_memories补回）
+            if "npc_memories" in data:
+                self._restore_npc_memories(data["npc_memories"])
+            return True
+        
+        # 旧格式：直接是 GameState.to_dict()
+        self.state = GameState.from_dict(data)
+        if "game_id" in data:
+            self.game_id = data["game_id"]
         return True
+
+    def _restore_npc_memories(self, npc_memories: Dict):
+        """从存档快照恢复NPC记忆（如果state中缺失）"""
+        for name, mem_data in npc_memories.items():
+            if name in self.state.npcs:
+                npc = self.state.npcs[name]
+                # 如果state中记忆为空但快照中有，补回
+                if not npc.get("memories") and mem_data.get("memories"):
+                    npc["memories"] = mem_data["memories"]
+            else:
+                # NPC完全缺失，创建一个基础结构（保留记忆）
+                self.state.update_npc(name)
+                self.state.npcs[name]["memories"] = mem_data.get("memories", [])
 
     @staticmethod
     def list_games(save_dir: str = "./saves") -> List[Dict]:

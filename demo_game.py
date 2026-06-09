@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Worldline Choice v4.5.0 演示脚本
-展示 d20强制检定 + 自动保存 + 回合结算（HP/金钱/状态效果）
+展示 d20强制检定 + 自动保存 + 回合结算 + DC校准 + 收益系统 + NPC关系 + 事件压缩
 """
 
 import json
@@ -13,7 +13,7 @@ from worldline_skill import WorldlineSkill
 
 def demo_game():
     print("="*60)
-    print("Worldline Choice v4.5.0 - d20强制检定 + 自动保存 + 回合结算演示")
+    print("Worldline Choice v4.5.0 - DC校准 + 收益系统 + 存档演示")
     print("="*60)
 
     skill = WorldlineSkill()
@@ -28,20 +28,27 @@ def demo_game():
     print(f"初始金币: {skill.state.resources.get('金币', 0)}")
     print(f"每回合金钱变化: {skill.state.money_per_turn:+d}")
 
-    # 模拟几个回合
+    print(f"\n{'='*60}")
+    print("【DC校准说明】")
+    print("="*60)
+    print("  简单 (DC 2-7): 低风险低收益")
+    print("  中等 (DC 8-12): 标准风险标准收益")
+    print("  困难 (DC 13-17): 高风险高回报")
+
+    # 模拟几个回合，展示不同DC范围
     actions = [
-        "我握紧长剑，大步走向声音来源",
-        "我躲进阴影中观察情况",
-        "我尝试说服对方放我过去",
+        ("我走到客栈门口看看", "简单"),
+        ("我尝试说服掌柜给我打折", "中等"),
+        ("我挑战武馆的馆主", "困难"),
     ]
 
-    for i, action in enumerate(actions, 1):
+    for i, (action, expected) in enumerate(actions, 1):
         print(f"\n{'='*60}")
-        print(f"回合 {i}")
+        print(f"回合 {i} ({expected}难度)")
         print(f"行动: {action}")
         print("-"*60)
 
-        # 执行回合 - 内部会自动调用execute_check
+        # 执行回合
         result = skill.process_turn(action)
 
         if "error" in result:
@@ -50,8 +57,10 @@ def demo_game():
 
         # 展示d20检定结果
         check = result.get('check', {})
+        dc = check.get('dc', 0)
+        dc_level = "简单" if dc <= 7 else "中等" if dc <= 12 else "困难" if dc <= 17 else "极难"
         print(f"\n🎲 【d20检定结果】")
-        print(f"   意图: {result.get('intention', '未知')}")
+        print(f"   DC等级: {dc_level} (DC={dc})")
         print(f"   骰子: d20 = {check.get('roll')}")
         print(f"   修正: {check.get('modifier', 0):+d}")
         print(f"   总计: {check.get('total')} vs DC {check.get('dc')}")
@@ -69,6 +78,8 @@ def demo_game():
                 print(f"   属性变化: {consequences['attribute_changes']}")
             if consequences.get('items_gained'):
                 print(f"   获得物品: {consequences['items_gained']}")
+            if consequences.get('money_change'):
+                print(f"   金钱变化: {consequences['money_change']:+d}")
             if consequences.get('tags_gained'):
                 print(f"   获得标签: {consequences['tags_gained']}")
 
@@ -103,26 +114,33 @@ def demo_game():
     for mem in summary['recent_memories']:
         print(f"    - [{mem['type']}] {mem['event']} (回合{mem['turn']})")
 
-    # 保存并展示完整存档
-    print(f"\n保存并展示存档...")
-    save_path = skill.save_game("demo_save")
+    # 保存并展示完整存档（新格式）
+    print(f"\n{'='*60}")
+    print("【新存档格式演示】")
+    print("="*60)
+
+    save_path = skill.save_game()
     print(f"存档已保存到: {save_path}")
 
     # 读取存档验证
-    print(f"\n验证存档...")
-    state = skill.get_state()
-    print(f"版本: {state.get('version', '未知')}")
-    print(f"总回合数: {state.get('turn_count')}")
-    print(f"历史记录数: {len(state.get('history', []))}")
-    print(f"当前金币: {state.get('resources', {}).get('金币', 0)}")
-    print(f"每回合金钱变化: {state.get('money_per_turn', 0):+d}")
-    print(f"NPC数量: {len(state.get('npcs', {}))}")
-    if state.get('npcs'):
-        for name, npc in state['npcs'].items():
-            print(f"  - {name}: 关系{npc.get('relationship', 0)}, 信任{npc.get('trust', 0)}, 记忆{npc.get('memories', [])}")
+    with open(save_path, 'r', encoding='utf-8') as f:
+        save_data = json.load(f)
+
+    print(f"\n存档结构:")
+    print(f"  - game_id: {save_data.get('game_id')}")
+    print(f"  - version: {save_data.get('version')}")
+    print(f"  - state: 完整GameState")
+    print(f"  - events: {len(save_data.get('events', []))} 条事件")
+    for e in save_data.get('events', []):
+        if e.get('type') == 'compressed':
+            print(f"    [压缩] {e.get('summary', '')[:60]}")
+        else:
+            print(f"    [详细] 回合{e.get('turn')}: {e.get('action', '')[:30]}")
+    print(f"  - npc_memories: {len(save_data.get('npc_memories', {}))} 个NPC")
+    print(f"  - saved_at: {save_data.get('saved_at')}")
 
     print(f"\n{'='*60}")
-    print("✓ 演示完成 - v4.5.0 d20强制检定 + 自动保存 + 回合结算 + NPC关系系统运行正常")
+    print("✓ 演示完成 - DC校准 + 收益系统 + 存档系统运行正常")
     print("="*60)
 
 if __name__ == "__main__":

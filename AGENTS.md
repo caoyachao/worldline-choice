@@ -224,73 +224,45 @@ WorldlineSkill                    # 主控制器
 
 ### 8.1 当前存档格式（v4.5.0）
 
-存档以 JSON 文件保存，按 `game_id` 隔离目录：
+存档以 JSON 文件保存，按 `game_id` 隔离目录，每个游戏目录下只有一个统一的存档文件 `game.json`：
 ```
 saves/
 └── game_{timestamp}_{world_setting}/
-    ├── game.json          # 主存档（GameState 最新状态）
-    └── auto.json          # 自动存档（由引擎每回合自动写入）
+    └── game.json          # 唯一主存档（每回合更新，不再生成多个文件）
 ```
 
-**注意**：`save_game()` 方法在写入前会向 `to_dict()` 结果中注入 `game_id` 字段（非 GameState 原生属性），用于加载时恢复目录上下文。
-
-结构为扁平字典，核心字段：
+**存档结构**：
 ```json
 {
-  "version": "4.5.0",
   "game_id": "game_1780885435_武侠",
-  "world_setting": "武侠",
-  "world_description": "",
-  "current_scene": "客栈大堂",
-  "player": {
-    "name": "李逍遥",
-    "role": "剑客",
-    "attributes": {"FORCE": 12, "MIND": 14, ...},
-    "inventory": {"capacity": 20, "items": [...]},
-    "tags": [],
-    "secrets": []
+  "version": "4.5.0",
+  "state": { ... GameState.to_dict() ... },
+  "events": [
+    {"type": "compressed", "turns_covered": [1,2,3,4,5], "summary": "..."},
+    {"type": "detailed", "turn": 6, "action": "...", "summary": "...", "degree": "成功"}
+  ],
+  "npc_memories": {
+    "店小二": {"memories": [...], "last_updated_turn": 10}
   },
-  "npcs": {
-    "店小二": {
-      "relationship": 10,        # 总体关系 (-100~100)
-      "attitude": "友善",
-      "known_secrets": [],
-      "trust": 15,               # 信任度 (-100~100)
-      "fear": 0,                 # 恐惧度 (-100~100)
-      "loyalty": 5,              # 忠诚度 (-100~100)
-      "affection": 8,            # 好感度 (-100~100)
-      "reputation": 10,          # 声誉 (-100~100)
-      "interaction_count": 3,    # 互动次数
-      "first_met_turn": 1,       # 首次相遇回合
-      "last_interaction_turn": 5, # 上次互动回合
-      "memories": [
-        {"event": "玩家给了小费", "turn": 1, "type": "positive"}
-      ],
-      "tags": ["客栈员工"],
-      "faction": "",
-      "location": "客栈大堂",
-      "status": "alive",
-      "role": "店小二",
-      "description": "热情的客栈伙计"
-    }
-  },
-  "history": [...],
-  "turn_count": 5,
-  "flags": {},
-  "hp": 100,
-  "max_hp": 100,
-  "resources": {"金币": 50},
-  "status_effects": [],
-  "attribute_history": {},
-  "money_per_turn": -2,
-  "ending_triggered": false,     # 结局是否触发
-  "ending_type": "",             # 结局类型
-  "death_triggered": false,      # 死亡是否触发
-  "active_benefits": [],
-  "scene_objects": [],
-  "npc_assist_log": []
+  "saved_at": "2026-06-08T10:00:00"
 }
 ```
+
+**事件压缩机制**：
+- 最近10个回合的事件保持详细记录
+- 超过10个回合后，最早的5个详细事件自动压缩为1条摘要
+- 压缩通过回退模板或LLM生成摘要
+- 旧存档加载时自动恢复事件历史
+
+**NPC记忆**：
+- 存档时自动提取 `state.npcs` 中每个NPC的 `memories`
+- 加载时如果 `state` 中记忆缺失，从 `npc_memories` 补回
+- 记忆上限20条，自动保留最新
+
+**向后兼容**：
+- 旧版 `save_game("xxx")` 传入 save_id 仍兼容，保存到指定文件名
+- 旧版 `load_game("xxx")` 仍兼容，优先查找 `game.json`，找不到则回退到旧文件名
+- 旧版 `auto_turn_*.json` 文件不再生成，但已存在的文件仍可读取
 
 ### 8.2 旧版兼容（v3.x → v4.x）
 

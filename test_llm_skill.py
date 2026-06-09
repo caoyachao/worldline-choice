@@ -193,17 +193,18 @@ def test_skill_integration():
         assert turn["turn"] == i + 2
     print("✓ 多回合处理正确")
 
-    # 测试存档（v4.5.0：游戏目录隔离）
-    save_path = skill.save_game("test_save")
+    # 测试存档（v4.5.0：游戏目录隔离，新格式game.json）
+    save_path = skill.save_game()
     assert os.path.exists(save_path)
     assert skill.game_id in save_path
+    assert save_path.endswith("game.json")
     print(f"✓ 存档功能正确（路径: {save_path}）")
 
     # 测试读档
     new_skill = WorldlineSkill()
     # 需要手动设置 game_id 才能加载
     new_skill.game_id = skill.game_id
-    assert new_skill.load_game("test_save")
+    assert new_skill.load_game()
     assert new_skill.state.world_setting == "赛博朋克"
     assert new_skill.state.turn_count == 4
     print("✓ 读档功能正确")
@@ -529,12 +530,12 @@ def test_directory_isolation():
     # 创建两个游戏
     skill1 = WorldlineSkill()
     skill1.start_game("武侠", "剑客", "玩家1")
-    skill1.save_game("game")
+    skill1.save_game()
     skill1.process_turn("测试行动")
 
     skill2 = WorldlineSkill()
     skill2.start_game("科幻", "宇航员", "玩家2")
-    skill2.save_game("game")
+    skill2.save_game()
     skill2.process_turn("探索星球")
 
     # 验证目录存在
@@ -684,6 +685,152 @@ def test_npc_relationship_system():
     print("✓ NPC关系系统测试通过\n")
 
 
+def test_dc_calibration():
+    """测试DC重新校准（2-7简单/8-12中等/13-17困难）"""
+    print("="*60)
+    print("测试13: DC校准")
+    print("="*60)
+
+    skill = WorldlineSkill(show_dice=True)
+    skill.start_game("武侠", "剑客", "李逍遥")
+
+    # 测试回退分析DC值
+    result = skill.llm._default_analysis("走路去市场", skill.state)
+    assert 2 <= result["base_dc"] <= 7, f"通用行动DC={result['base_dc']} 不在简单范围(2-7)"
+    print(f"✓ 通用行动DC={result['base_dc']}（简单范围）")
+
+    result = skill.llm._default_analysis("talk to someone", skill.state)
+    assert 2 <= result["base_dc"] <= 7, f"简单社交DC={result['base_dc']} 不在简单范围(2-7)"
+    print(f"✓ 简单社交DC={result['base_dc']}（简单范围）")
+
+    result = skill.llm._default_analysis("persuade the guard", skill.state)
+    assert 8 <= result["base_dc"] <= 12, f"说服陌生人DC={result['base_dc']} 不在中等范围(8-12)"
+    print(f"✓ 说服陌生人DC={result['base_dc']}（中等范围）")
+
+    result = skill.llm._default_analysis("fight enemy", skill.state)
+    assert 8 <= result["base_dc"] <= 12, f"战斗DC={result['base_dc']} 不在中等范围(8-12)"
+    print(f"✓ 战斗DC={result['base_dc']}（中等范围）")
+
+    result = skill.llm._default_analysis("hide from guards", skill.state)
+    assert 8 <= result["base_dc"] <= 12, f"潜行DC={result['base_dc']} 不在中等范围(8-12)"
+    print(f"✓ 潜行DC={result['base_dc']}（中等范围）")
+
+    # 测试默认选项DC范围
+    options = skill.llm._default_options(skill.state)
+    dc_values = [opt.get("dc_hint", 0) for opt in options.get("options", [])]
+    assert all(2 <= dc <= 17 for dc in dc_values), f"有选项DC超出范围: {dc_values}"
+    # 至少一个简单选项
+    assert any(dc <= 7 for dc in dc_values), f"没有简单选项(DC≤7): {dc_values}"
+    # 至少一个中等选项
+    assert any(8 <= dc <= 10 for dc in dc_values), f"没有中等选项(DC 8-10): {dc_values}"
+    print(f"✓ 默认选项DC范围正确: {dc_values}，含简单选项和中等选项")
+
+    print("✓ DC校准测试通过\n")
+
+
+def test_save_load_format():
+    """测试新存档格式（game.json + events + npc_memories）"""
+    print("="*60)
+    print("测试14: 新存档格式")
+    print("="*60)
+
+    import json
+    import os
+
+    skill = WorldlineSkill(show_dice=True)
+    skill.start_game("武侠", "剑客", "李逍遥")
+
+    # 添加一些NPC和事件
+    skill.state.update_npc("店小二", relationship=10, trust=15)
+    skill.state.add_npc_memory("店小二", "给了小费", "positive")
+    
+    # 执行几个回合产生事件
+    for i in range(3):
+        skill.process_turn(f"测试行动{i+1}")
+
+    # 保存
+    save_path = skill.save_game()
+    assert save_path.endswith("game.json"), f"存档路径不以game.json结尾: {save_path}"
+    print(f"✓ 保存路径正确: {save_path}")
+
+    # 检查存档内容
+    with open(save_path, 'r', encoding='utf-8') as f:
+        save_data = json.load(f)
+
+    assert "state" in save_data, "新存档缺少state字段"
+    assert "events" in save_data, "新存档缺少events字段"
+    assert "npc_memories" in save_data, "新存档缺少npc_memories字段"
+    assert "saved_at" in save_data, "新存档缺少saved_at字段"
+    print("✓ 新存档格式字段完整")
+
+    # 检查events
+    events = save_data["events"]
+    assert len(events) >= 3, f"事件数量不足: {len(events)}"
+    detailed = [e for e in events if e.get("type") == "detailed"]
+    assert len(detailed) >= 3, f"详细事件数量不足: {len(detailed)}"
+    print(f"✓ 事件历史正确: {len(events)}条事件({len(detailed)}详细)")
+
+    # 检查npc_memories
+    npc_mems = save_data["npc_memories"]
+    assert "店小二" in npc_mems, "NPC记忆快照中缺少店小二"
+    assert len(npc_mems["店小二"]["memories"]) == 1, "NPC记忆数量不对"
+    print("✓ NPC记忆快照正确")
+
+    # 加载
+    new_skill = WorldlineSkill()
+    new_skill.game_id = skill.game_id
+    assert new_skill.load_game(), "加载失败"
+    assert new_skill.state.world_setting == "武侠"
+    assert "店小二" in new_skill.state.npcs
+    assert new_skill.state.npcs["店小二"]["trust"] == 15
+    print("✓ 加载恢复正确")
+
+    print("✓ 新存档格式测试通过\n")
+
+
+def test_event_compression():
+    """测试事件压缩（超过10条后压缩）"""
+    print("="*60)
+    print("测试15: 事件压缩")
+    print("="*60)
+
+    skill = WorldlineSkill(show_dice=True)
+    skill.start_game("武侠", "剑客", "李逍遥")
+
+    # 执行15个回合，产生超过10条历史
+    for i in range(15):
+        skill.process_turn(f"行动{i+1}")
+
+    # 检查历史数量
+    assert len(skill.state.history) == 15, f"历史数量={len(skill.state.history)}，期望15"
+
+    # 构建事件历史
+    events = skill._build_event_history()
+    detailed = [e for e in events if e.get("type") == "detailed"]
+    compressed = [e for e in events if e.get("type") == "compressed"]
+
+    # 最近10条应该是详细
+    assert len(detailed) == 10, f"详细事件数量={len(detailed)}，期望10"
+    # 最早的5条应该被压缩成1条
+    assert len(compressed) == 1, f"压缩事件数量={len(compressed)}，期望1"
+    assert compressed[0].get("turns_covered") == [1, 2, 3, 4, 5], f"压缩覆盖回合不对"
+    print(f"✓ 事件压缩正确: 15条→{len(compressed)}条压缩 + {len(detailed)}条详细")
+
+    # 再执行5个回合，总计20条
+    for i in range(5):
+        skill.process_turn(f"额外行动{i+1}")
+
+    events = skill._build_event_history()
+    detailed = [e for e in events if e.get("type") == "detailed"]
+    compressed = [e for e in events if e.get("type") == "compressed"]
+    assert len(detailed) == 10, f"详细事件数量={len(detailed)}，期望10"
+    # 最早10条压缩成2条
+    assert len(compressed) == 2, f"压缩事件数量={len(compressed)}，期望2"
+    print(f"✓ 20条事件压缩正确: {len(compressed)}条压缩 + {len(detailed)}条详细")
+
+    print("✓ 事件压缩测试通过\n")
+
+
 def run_all_tests():
     """运行所有测试"""
     print("\n" + "="*60)
@@ -703,6 +850,9 @@ def run_all_tests():
         test_settlement()
         test_directory_isolation()
         test_npc_relationship_system()
+        test_dc_calibration()
+        test_save_load_format()
+        test_event_compression()
 
         print("="*60)
         print("✓ 所有测试通过!")
