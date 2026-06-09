@@ -1,6 +1,6 @@
 name: worldline-choice
-version: 4.5.0
-description: AI驱动互动叙事游戏引擎 v4.5.0 - 角色成长版。支持LLM驱动的意图识别和d20客观检定，新增角色成长系统（HP/资源/背包/状态效果/属性升级）。
+version: 4.6.0
+description: AI驱动互动叙事游戏引擎 v4.6.0 - DC校准与收益版。支持LLM驱动的意图识别和d20客观检定，新增DC校准体系（简单2-7/中等8-12/困难13-17）、收益与DC严格对应、统一存档系统（单文件game.json+事件压缩）、完整NPC关系系统。
 author: Worldline Team
 license: MIT
 

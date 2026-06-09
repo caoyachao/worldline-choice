@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Worldline Choice v4.5.0 演示脚本
+Worldline Choice v4.6.0 演示脚本
 展示 d20强制检定 + 自动保存 + 回合结算 + DC校准 + 收益系统 + NPC关系 + 事件压缩
 """
 
@@ -13,7 +13,7 @@ from worldline_skill import WorldlineSkill
 
 def demo_game():
     print("="*60)
-    print("Worldline Choice v4.5.0 - DC校准 + 收益系统 + 存档演示")
+    print("Worldline Choice v4.6.0 - DC校准 + 收益系统 + 存档演示")
     print("="*60)
 
     skill = WorldlineSkill()

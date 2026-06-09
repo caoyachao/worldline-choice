@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Worldline Choice - LLM驱动 + d20检定混合架构 (v4.5.0)
+Worldline Choice - LLM驱动 + d20检定混合架构 (v4.6.0)
 面向OpenClaw智能体和CLI的Skill实现
 
 核心设计：
@@ -205,7 +205,7 @@ class D20Engine:
 class GameState:
     """精简版游戏状态，专注核心数据"""
 
-    VERSION = "4.5.0"
+    VERSION = "4.6.0"
 
     # 属性上限
     ATTRIBUTE_MAX = 50

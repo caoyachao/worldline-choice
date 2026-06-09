@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Worldline Choice (世界线·抉择) is an AI-driven interactive narrative game engine using LLM + d20 check hybrid architecture.
 
-**Current Version**: 4.5.0 - Character Growth Edition
+**Current Version**: 4.6.0 - DC Calibration & Reward Edition
 
 This is a pure-Python project with no external dependencies.
 
@@ -19,7 +19,7 @@ This is a pure-Python project with no external dependencies.
 - **List saves**: `python3 worldline_engine.py --list`
 - **Load save**: `python3 worldline_engine.py --load <save_id>`
 
-## Architecture (v4.5.0 - Character Growth)
+## Architecture (v4.6.0 - DC Calibration & Reward)
 
 ### Core Design Philosophy
 
@@ -168,7 +168,7 @@ adapter.start_game("赛博朋克", "黑客", "V")
 v4.3.0 format with tactical data:
 ```json
 {
-  "version": "4.5.0",
+  "version": "4.6.0",
   "world_setting": "武侠",
   "player": {
     "name": "李逍遥",

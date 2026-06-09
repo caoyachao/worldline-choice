@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Worldline Choice - 兼容入口层 (v4.5.0)
+Worldline Choice - 兼容入口层 (v4.6.0)
 
 本文件作为向后兼容的入口点，统一代理到 worldline_skill.py 的核心实现。
 确保 agent / CLI / 旧代码都能使用到内建的 d20 检定系统。
@@ -9,7 +9,7 @@ Worldline Choice - 兼容入口层 (v4.5.0)
 1. WorldlineEngine 继承自 WorldlineSkill，默认 show_dice=True，透明暴露 d20 结果。
 2. 兼容旧版 API 签名（如 get_system_prompt / process_action 等映射到新接口）。
 3. 旧版存档格式可通过 _migrate_legacy_save() 自动迁移到新版 flat GameState。
-4. v4.5.0 新增：角色成长系统、回合结算、游戏目录隔离。
+4. v4.6.0 新增：DC校准体系、收益与DC对应、统一存档系统、事件压缩、NPC记忆持久化。
 """
 
 import json
@@ -347,7 +347,7 @@ class WorldlineEngine(WorldlineSkill):
                     npc[k] = v
 
         # 版本升级标记
-        data["version"] = "4.5.0"
+        data["version"] = "4.6.0"
         return data
 
     # ------------------------------------------------------------------
@@ -427,7 +427,7 @@ class GameCLI:
             print(f"游戏ID: {result['game_id']}")
             print(f"角色: {name} ({role})")
             print(f"属性: {json.dumps(result['player']['attributes'], ensure_ascii=False)}")
-            print(f"\n新版引擎已启用 d20 检定系统 + 角色成长系统(v4.5.0)。")
+            print(f"\n新版引擎已启用 d20 检定系统 + DC校准与收益系统(v4.6.0)。")
             print(f"现在可以使用 process_turn() 或 generate_turn_options() 继续游戏。")
 
         elif command in ("--load", "-l"):

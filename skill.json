@@ -1,7 +1,7 @@
 {
   "name": "worldline-choice",
-  "version": "4.5.0",
-  "description": "AI驱动互动叙事游戏引擎 v4.5.0 - 角色成长版。在v4.4.1基础上引入角色成长系统：游戏目录隔离、HP/资源/背包/状态效果、回合结算机制、属性升级机制（上限50）。引擎层强制执行，LLM只需读取保存状态。禁止保存相关幻觉行为。",
+  "version": "4.6.0",
+  "description": "AI驱动互动叙事游戏引擎 v4.6.0 - DC校准与收益版。在v4.5.0基础上引入DC校准体系（简单2-7/中等8-12/困难13-17）、收益与DC严格对应、统一存档系统（单文件game.json+事件压缩）、完整NPC关系系统。引擎层强制执行，LLM只需读取保存状态。禁止保存相关幻觉行为。",
   "author": "Worldline Team",
   "entry": "worldline_skill.py",
   "runtime": "python3",
