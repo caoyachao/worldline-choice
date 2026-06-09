@@ -454,8 +454,12 @@ def test_growth_system():
     # 测试死亡检测
     skill.state.hp = 5
     skill.state.death_triggered = False
-    # 施加一个致命状态
-    skill.state.add_status_effect({"id": "致命伤", "duration": 1, "effects": {"hp": -10}})
+    # 施加一个致命状态（暂停HP衰减，避免体质恢复导致测试不稳定）
+    skill.state.add_status_effect({
+        "id": "致命伤", "duration": 1,
+        "effects": {"hp": -10},
+        "pause_hp_decay": True
+    })
     settlement = skill.settle_turn()
     assert settlement["death_triggered"] == True
     assert skill.state.death_triggered == True
@@ -681,6 +685,29 @@ def test_npc_relationship_system():
     assert old_state.npcs["老王"]["memories"] == []
     assert old_state.npcs["老王"]["status"] == "alive"
     print("✓ 旧存档NPC字段自动补全正确")
+
+    # 测试9: 记忆压缩（超过10条后，最早5条压缩为1条）
+    skill2 = WorldlineSkill(show_dice=True)
+    skill2.start_game("武侠", "剑客", "李逍遥")
+    # 添加12条记忆，触发压缩（>10，最早5条→1条摘要）
+    for i in range(12):
+        mtype = "positive" if i % 3 == 0 else "negative" if i % 3 == 1 else "neutral"
+        skill2.state.add_npc_memory("掌柜", f"事件{i+1}", mtype)
+    mems = skill2.state.npcs["掌柜"]["memories"]
+    assert len(mems) == 8, f"压缩后应为8条(1摘要+7详细)，实际{len(mems)}"
+    assert mems[0]["type"] == "compressed", f"第1条应为摘要，实际是{mems[0]['type']}"
+    assert mems[0].get("compressed_count") == 5, f"摘要应压缩5条，实际{mems[0].get('compressed_count')}"
+    assert "事件6" in mems[1]["event"], f"第2条应为事件6，实际是{mems[1]['event']}"
+    print("✓ 记忆压缩正确（12条→1摘要+7详细=8条）")
+
+    # 再添加10条，总计22条，应再次触发压缩
+    for i in range(10):
+        skill2.state.add_npc_memory("掌柜", f"额外事件{i+1}", "positive")
+    mems = skill2.state.npcs["掌柜"]["memories"]
+    assert len(mems) == 10, f"最终应为10条，实际{len(mems)}"
+    compressed_count = sum(1 for m in mems if m.get("type") == "compressed")
+    assert compressed_count >= 1, f"应至少有1条摘要，实际{compressed_count}"
+    print(f"✓ 多次记忆压缩正确（22条→{compressed_count}摘要+{10-compressed_count}详细=10条）")
 
     print("✓ NPC关系系统测试通过\n")
 

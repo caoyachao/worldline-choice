@@ -439,7 +439,7 @@ class GameState:
         self.npcs[name].update(kwargs)
 
     def add_npc_memory(self, name: str, event: str, memory_type: str = "neutral"):
-        """为NPC添加记忆事件"""
+        """为NPC添加记忆事件。超过10条后，最早5条自动压缩为1条摘要。"""
         if name not in self.npcs:
             self.update_npc(name)
         self.npcs[name]["memories"].append({
@@ -448,9 +448,35 @@ class GameState:
             "type": memory_type,  # positive / negative / neutral
             "timestamp": datetime.now().isoformat()
         })
-        # 限制记忆数量，防止无限增长
-        if len(self.npcs[name]["memories"]) > 20:
-            self.npcs[name]["memories"] = self.npcs[name]["memories"][-20:]
+        # 记忆压缩：超过10条时，将最早5条压缩为1条摘要
+        self.npcs[name]["memories"] = self._compress_npc_memories(
+            self.npcs[name]["memories"]
+        )
+
+    def _compress_npc_memories(self, memories: List[Dict]) -> List[Dict]:
+        """压缩NPC记忆：超过10条时，最早5条合并为1条摘要"""
+        if len(memories) <= 10:
+            return memories
+        # 取最早5条进行压缩
+        oldest = memories[:5]
+        remaining = memories[5:]
+        # 生成摘要：统计正负中性数量，提取关键事件
+        pos_count = sum(1 for m in oldest if m.get("type") == "positive")
+        neg_count = sum(1 for m in oldest if m.get("type") == "negative")
+        neu_count = len(oldest) - pos_count - neg_count
+        events = [m.get("event", "") for m in oldest]
+        event_summary = ", ".join(events[:3])
+        if len(events) > 3:
+            event_summary += f" 等{len(events)}件事"
+        turns = [m.get("turn", 0) for m in oldest]
+        summary = {
+            "event": f"[摘要] 回合{min(turns)}-{max(turns)}: {event_summary} (正{pos_count}/负{neg_count}/中{neu_count})",
+            "turn": max(turns),
+            "type": "compressed",
+            "timestamp": datetime.now().isoformat(),
+            "compressed_count": len(oldest)
+        }
+        return [summary] + remaining
 
     def get_npc_summary(self, name: str) -> Dict:
         """获取NPC格式化摘要"""

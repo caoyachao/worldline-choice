@@ -271,7 +271,7 @@ v4.5.0 引入了完整的角色成长系统，使每回合都有状态层面的�
 - 为每次涉及NPC的回合自动增加 `interaction_count`
 - 记录 `last_interaction_turn`
 - 合并 `tags` 和 `known_secrets`（去重）
-- 限制记忆数量上限为20条（保留最新）
+- 限制记忆数量上限为10条，超过后最早5条自动压缩为1条摘要（保留最新）
 
 
 叙事中的 `consequences.attribute_changes` 和 `attribute_change_reasons` 会被引擎自动处理：
@@ -354,7 +354,7 @@ DC不仅决定难度，还决定成功后的收益规模。引擎在Prompt中明
 **NPC记忆持久化**：
 - 存档时自动保存所有NPC的 `memories` 列表
 - 加载时自动恢复，确保NPC关系不会因存档而丢失
-- 记忆上限20条，自动保留最新
+- 记忆上限10条，超过后最早5条自动压缩为1条摘要（保留最新）
 
 ---
 
