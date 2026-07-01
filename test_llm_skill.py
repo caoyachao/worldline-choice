@@ -785,23 +785,21 @@ def test_save_load_format():
         save_data = json.load(f)
 
     assert "state" in save_data, "新存档缺少state字段"
-    assert "events" in save_data, "新存档缺少events字段"
-    assert "npc_memories" in save_data, "新存档缺少npc_memories字段"
+    assert "events" not in save_data, "新存档不应包含冗余events字段"
+    assert "npc_memories" not in save_data, "新存档不应包含冗余npc_memories字段"
     assert "saved_at" in save_data, "新存档缺少saved_at字段"
-    print("✓ 新存档格式字段完整")
+    print("✓ 新存档格式字段完整（无冗余）")
 
-    # 检查events
-    events = save_data["events"]
-    assert len(events) >= 3, f"事件数量不足: {len(events)}"
-    detailed = [e for e in events if e.get("type") == "detailed"]
-    assert len(detailed) >= 3, f"详细事件数量不足: {len(detailed)}"
-    print(f"✓ 事件历史正确: {len(events)}条事件({len(detailed)}详细)")
+    # 检查state.history（事件存储在state内部）
+    history = save_data["state"]["history"]
+    assert len(history) >= 3, f"历史记录数量不足: {len(history)}"
+    print(f"✓ 历史记录正确: {len(history)}条")
 
-    # 检查npc_memories
-    npc_mems = save_data["npc_memories"]
-    assert "店小二" in npc_mems, "NPC记忆快照中缺少店小二"
-    assert len(npc_mems["店小二"]["memories"]) == 1, "NPC记忆数量不对"
-    print("✓ NPC记忆快照正确")
+    # 检查state.npcs（NPC记忆存储在state内部）
+    npcs = save_data["state"]["npcs"]
+    assert "店小二" in npcs, "NPC数据中缺少店小二"
+    assert len(npcs["店小二"]["memories"]) == 1, "NPC记忆数量不对"
+    print("✓ NPC记忆存储正确")
 
     # 加载
     new_skill = WorldlineSkill()
@@ -813,49 +811,6 @@ def test_save_load_format():
     print("✓ 加载恢复正确")
 
     print("✓ 新存档格式测试通过\n")
-
-
-def test_event_compression():
-    """测试事件压缩（超过10条后压缩）"""
-    print("="*60)
-    print("测试15: 事件压缩")
-    print("="*60)
-
-    skill = WorldlineSkill(show_dice=True)
-    skill.start_game("武侠", "剑客", "李逍遥")
-
-    # 执行15个回合，产生超过10条历史
-    for i in range(15):
-        skill.process_turn(f"行动{i+1}")
-
-    # 检查历史数量
-    assert len(skill.state.history) == 15, f"历史数量={len(skill.state.history)}，期望15"
-
-    # 构建事件历史
-    events = skill._build_event_history()
-    detailed = [e for e in events if e.get("type") == "detailed"]
-    compressed = [e for e in events if e.get("type") == "compressed"]
-
-    # 最近10条应该是详细
-    assert len(detailed) == 10, f"详细事件数量={len(detailed)}，期望10"
-    # 最早的5条应该被压缩成1条
-    assert len(compressed) == 1, f"压缩事件数量={len(compressed)}，期望1"
-    assert compressed[0].get("turns_covered") == [1, 2, 3, 4, 5], f"压缩覆盖回合不对"
-    print(f"✓ 事件压缩正确: 15条→{len(compressed)}条压缩 + {len(detailed)}条详细")
-
-    # 再执行5个回合，总计20条
-    for i in range(5):
-        skill.process_turn(f"额外行动{i+1}")
-
-    events = skill._build_event_history()
-    detailed = [e for e in events if e.get("type") == "detailed"]
-    compressed = [e for e in events if e.get("type") == "compressed"]
-    assert len(detailed) == 10, f"详细事件数量={len(detailed)}，期望10"
-    # 最早10条压缩成2条
-    assert len(compressed) == 2, f"压缩事件数量={len(compressed)}，期望2"
-    print(f"✓ 20条事件压缩正确: {len(compressed)}条压缩 + {len(detailed)}条详细")
-
-    print("✓ 事件压缩测试通过\n")
 
 
 def run_all_tests():
@@ -879,7 +834,6 @@ def run_all_tests():
         test_npc_relationship_system()
         test_dc_calibration()
         test_save_load_format()
-        test_event_compression()
 
         print("="*60)
         print("✓ 所有测试通过!")
