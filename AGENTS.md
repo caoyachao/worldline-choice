@@ -1,7 +1,7 @@
 # AGENTS.md — Worldline Choice 开发指南
 
 > 本文件供 AI 编码智能体阅读。阅读者应当被假定为对项目一无所知。
-> 当前版本：v4.6.0 (DC校准与收益版)
+> 当前版本：v4.7.0 (精简版)
 
 ---
 
@@ -9,7 +9,7 @@
 
 **Worldline Choice (世界线·抉择)** 是一个 AI 驱动的开放式互动叙事游戏引擎。核心设计理念是 **LLM + d20 混合架构**：
 
-- **LLM** 负责：意图理解、DC 评估、基于骰子结果的叙事生成
+- **LLM** 负责：意图理解、DC 评估、基于骰子结果的叙事生成、NPC 识别、世界观初始化（金钱设定等）
 - **d20 引擎** 负责：客观判定行动成败（纯代码实现，不受 LLM 影响）
 - **游戏引擎** 负责：状态管理、规则执行、存档管理、强制自动保存、回合结算（HP/金钱/状态效果）
 
@@ -33,13 +33,13 @@
 
 ```
 .
-├── worldline_skill.py      # 核心实现（~1800行）—— 主引擎、D20系统、GameState、LLMDriver、角色成长系统
-├── worldline_engine.py     # 向后兼容入口（~430行）—— 兼容层、旧版API映射、CLI参数解析
+├── worldline_skill.py      # 核心实现（~2100行）—— 主引擎、D20系统、GameState、LLMDriver、角色成长系统
+├── worldline_engine.py     # 向后兼容入口（~400行）—— 兼容层、旧版API映射、CLI参数解析
 ├── openclaw_adapter.py     # OpenClaw 适配器（276行）—— 封装为 OpenClaw 可调用的 Skill
 ├── skill.json              # OpenClaw Skill 工具清单（定义所有可调用的工具/参数）
 ├── manifest.yaml           # OpenClaw 运行时清单（入口、命令、依赖声明）
-├── demo_game.py            # 演示脚本（91行）—— 展示 d20 强制检定 + 自动保存 + 回合结算
-├── test_llm_skill.py       # 新版测试套件（~600行）—— 测试 v4.x 架构
+├── demo_game.py            # 演示脚本（147行）—— 展示 d20 强制检定 + 自动保存 + 回合结算
+├── test_llm_skill.py       # 新版测试套件（~850行）—— 测试 v4.x 架构
 ├── worldline_choice.sh     # Bash 启动脚本（默认启动 `worldline_skill.py`）
 ├── README.md               # 用户文档（中文）
 ├── SKILL.md                # 智能体主持手册（中文）—— Agent 行为规则与 API 速查
@@ -97,39 +97,27 @@ D20Engine                         # 纯 d20 检定系统（完全客观）
 
 GameState                         # 精简游戏状态
   ├─ 玩家属性 / 背包 / 标签 / 秘密
-  ├─ NPC 关系（扁平结构）
+  ├─ NPC 关系（扁平结构，15字段完整社交网络模型）
   ├─ 历史记录（保留最近50条）
   ├─ HP / 最大HP
   ├─ 资源（金币、声望等）
   ├─ 状态效果（Buff/Debuff）
   ├─ 属性成长历史（审计日志）
-  ├─ 每回合金钱变化（money_per_turn）
-  ├─ active_benefits（战术加成，v4.3.0）
-  ├─ scene_objects（场景互动物体）
-  └─ npc_assist_log（NPC 协助记录）
+  └─ 每回合金钱变化（money_per_turn）
 
 LLMDriver                         # LLM 驱动抽象层
   ├─ analyze_action()             # 分析意图 → ActionAnalysis
   ├─ generate_options()           # 生成回合选项
   ├─ generate_narrative()         # 基于骰子结果生成叙事
-  └─ 默认回退实现（无 LLM 时走关键词匹配）
+  └─ 默认回退实现（无 LLM 时的极简固定值）
 
 WorldlineSkill                    # 主控制器
-  ├─ start_game()                 # 初始化游戏（含世界观金钱映射）
+  ├─ start_game()                 # 初始化游戏
   ├─ process_turn()               # 处理回合（核心链路）
   ├─ generate_turn_options()      # 生成本回合选项
   ├─ process_option()             # 处理 A/B/C/D/E 选择
   ├─ save_game() / load_game()    # 存档/读档（游戏目录隔离）
-  ├─ settle_turn()                # 回合结算（v4.5.0：HP/金钱/状态效果）
-  ├─ 战术增强系统（v4.3.0）
-  │   ├─ set_scene_objects()
-  │   ├─ interact_with_scene_object()
-  │   ├─ execute_npc_check()
-  │   ├─ add_active_benefit()
-  │   ├─ consume_active_benefit()
-  │   ├─ get_active_benefits()
-  │   └─ calculate_effective_dc()
-  └─ 自动保存（v4.4.1+，每回合强制执行）
+  └─ settle_turn()                # 回合结算（v4.5.0：HP/金钱/状态效果）
 ```
 
 ### 5.2 兼容层（`worldline_engine.py`）
@@ -148,17 +136,15 @@ WorldlineSkill                    # 主控制器
   ↓
 2. 检查前置条件（物品缺失则直接返回错误）
   ↓
-3. 应用外部 DC 修正（来自 active_benefits）
+3. d20.execute_check() → CheckResult（客观投骰）
   ↓
-4. d20.execute_check() → CheckResult（客观投骰）
+4. LLM.generate_narrative()（基于骰子结果生成叙事）
   ↓
-5. LLM.generate_narrative()（基于骰子结果生成叙事）
+5. 应用状态变更（_apply_consequences：属性/物品/HP/金钱/状态效果）
   ↓
-6. 应用状态变更（_apply_consequences：属性/物品/HP/金钱/状态效果）
+6. 回合结算（settle_turn：tick衰减→修正计算→体质联动→金钱结算→死亡检测）
   ↓
-7. 回合结算（settle_turn：tick衰减→修正计算→体质联动→金钱结算→死亡检测）
-  ↓
-8. 记录历史 + 强制自动保存
+7. 记录历史 + 强制自动保存
   ↓
 返回 TurnResult（含 auto_save + settlement 字段）
 ```
@@ -185,7 +171,7 @@ WorldlineSkill                    # 主控制器
 
 ### 6.4 版本号管理
 - `GameState.VERSION` 和 `skill.json` 中的 `version` 字段必须同步更新。
-- 当前版本号：**4.6.0**
+- 当前版本号：**5.0.0**
 
 ---
 
@@ -196,7 +182,7 @@ WorldlineSkill                    # 主控制器
 | 测试函数 | 测试内容 |
 |----------|----------|
 | `test_d20_engine()` | 修正值计算、随机性分布、优势/劣势机制 |
-| `test_game_state()` | 属性边界、物品/NPC/历史管理、序列化往返 |
+| `test_game_state()` | 属性边界、物品/NPC/历史管理、序列化往返、旧版存档兼容 |
 | `test_skill_integration()` | 无 LLM 模式下的完整回合链路、存档/读档 |
 | `test_openclaw_adapter()` | 适配器封装、analyze/execute_check/narrative 分离 |
 | `test_llm_d20_separation()` | 验证骰子随机性、叙事与检定结果一致性 |
@@ -206,23 +192,23 @@ WorldlineSkill                    # 主控制器
 | `test_growth_system()` | 属性升级、上限50、成长审计、死亡检测 |
 | `test_settlement()` | 状态效果tick、体质联动HP、暂停衰减、有效属性 |
 | `test_directory_isolation()` | 游戏目录隔离、多游戏存档 |
+| `test_npc_relationship_system()` | 完整NPC关系系统、记忆压缩、边界限制 |
+| `test_default_fallback_dc()` | 默认回退 stubs 返回合理DC值 |
+| `test_save_load_format()` | 新存档格式（game.json + 事件历史 + NPC记忆） |
 
 **运行方式：** `python3 test_llm_skill.py`
 **状态：** 全部通过 ✓
 
 ### 7.2 建议的测试增补方向
-- 战术增强系统（`active_benefits` 的叠加与消耗）
-- 场景物体互动（`interact_with_scene_object`）
-- NPC 协助检定（`execute_npc_check`）
 - 存档迁移（v3.x → v4.x）
 - 自动保存异常处理
-- 金钱结算机制（世界观映射、每回合结算）
+- 金钱结算机制（每回合结算）
 
 ---
 
 ## 8. 存档格式与迁移
 
-### 8.1 当前存档格式（v4.6.0）
+### 8.1 当前存档格式（v4.7.0）
 
 存档以 JSON 文件保存，按 `game_id` 隔离目录，每个游戏目录下只有一个统一的存档文件 `game.json`：
 ```
@@ -235,7 +221,7 @@ saves/
 ```json
 {
   "game_id": "game_1780885435_武侠",
-  "version": "4.6.0",
+  "version": "4.7.0",
   "state": { ... GameState.to_dict() ... },
   "events": [
     {"type": "compressed", "turns_covered": [1,2,3,4,5], "summary": "..."},
@@ -281,11 +267,10 @@ saves/
 
 ### 9.1 工具清单（`skill.json`）
 
-当前暴露给 OpenClaw 的工具共 18 个，分为：
+当前暴露给 OpenClaw 的工具共 11 个，分为：
 - **游戏流程**：`start_game`, `process_turn`, `generate_turn_options`, `process_option`
 - **检定与叙事**：`analyze_action`, `execute_check`, `generate_narrative`
 - **存档**：`save_game`, `load_game`, `get_game_state`
-- **战术增强**：`set_scene_objects`, `interact_with_scene_object`, `execute_npc_check`, `add_active_benefit`, `consume_active_benefit`, `get_active_benefits`, `calculate_effective_dc`
 
 ### 9.2 适配器（`openclaw_adapter.py`）
 
@@ -329,7 +314,6 @@ saves/
 
 ### 11.4 存档修改须知
 - 修改 `GameState` 的字段时，必须同步更新 `to_dict()` 和 `from_dict()`。
-- 如果新增战术字段，需在 `GameState.__init__`、`to_dict()`、`from_dict()` 中同步添加。
 
 ---
 
@@ -337,6 +321,8 @@ saves/
 
 | 版本 | 日期 | 核心变更 |
 |------|------|----------|
+| v5.0.0 | 2026-07-01 | 精简版。移除冗余程序化代码：NPC名称提取器、复杂默认回退、战术增强系统（active_benefits/scene_objects/npc_assist_log）、世界观硬编码金钱映射。LLM负责NPC识别、世界观初始化、环境互动叙事；引擎保留d20检定、状态管理、存档、回合结算。 |
+| v4.6.0 | 2026-06-09 | DC校准与收益版。
 | v4.6.0 | 2026-06-09 | DC校准与收益版。DC重新校准（简单2-7/中等8-12/困难13-17），Prompt注入明确评估标准；收益与DC严格对应（高风险高回报）；统一存档系统（单文件game.json+事件压缩）；NPC记忆自动持久化；完整NPC关系系统。 |
 | v4.4.1 | 2026-04-09 | 强制自动保存版。引擎层每回合强制自动保存。 |
 | v4.4.0 | 2026-04-07 | d20 强制检定版。`execute_check` 工具强制调用，禁止 LLM 脑补骰子。 |

@@ -57,7 +57,7 @@ class ActionAnalysis:
     risks: List[str]            # 失败风险
     required_items: List[str]   # 需要的物品（如果有）
     required_knowledge: List[str]  # 需要的知识/能力
-    detected_npcs: List[str] = None  # 从输入中提取的NPC名称列表 (v4.6.0增强)
+    detected_npcs: List[str] = None  # 涉及的NPC名称列表
 
     def __post_init__(self):
         if self.detected_npcs is None:
@@ -78,7 +78,7 @@ class NarrativeContext:
     player_name: str
     dc_value: int = 0           # 原始DC值
     dc_level: str = ""          # DC等级：简单/中等/困难/极难
-    detected_npcs: List[str] = None  # 本回合涉及的NPC (v4.6.0增强)
+    detected_npcs: List[str] = None  # 本回合涉及的NPC
 
     def __post_init__(self):
         if self.detected_npcs is None:
@@ -216,7 +216,7 @@ class D20Engine:
 class GameState:
     """精简版游戏状态，专注核心数据"""
 
-    VERSION = "4.6.0"
+    VERSION = "5.0.0" "4.7.0" "4.6.0"
 
     # 属性上限
     ATTRIBUTE_MAX = 50
@@ -268,10 +268,7 @@ class GameState:
         # 金钱系统（v4.5.0）：每回合基础金钱变化（正数=收入，负数=开销）
         self.money_per_turn: int = 0
 
-        # 战术增强系统（v4.3.0）：前置准备 + NPC协助 + 场景互动
-        self.active_benefits: List[Dict] = []    # 当前可用的战术加成
-        self.scene_objects: List[Dict] = []      # 场景中的可互动物体
-        self.npc_assist_log: List[Dict] = []     # NPC协助历史记录
+        # 战术增强系统已移除（v4.7.0）：由LLM在叙事中处理环境互动和NPC协作
 
         # 结局与死亡
         self.ending_triggered: bool = False
@@ -541,9 +538,6 @@ class GameState:
             "ending_triggered": self.ending_triggered,
             "ending_type": self.ending_type,
             "death_triggered": self.death_triggered,
-            "active_benefits": self.active_benefits,
-            "scene_objects": self.scene_objects,
-            "npc_assist_log": self.npc_assist_log,
         }
 
     @classmethod
@@ -628,11 +622,6 @@ class GameState:
         state.status_effects = data.get("status_effects", [])
         state.attribute_history = data.get("attribute_history", {})
         state.money_per_turn = data.get("money_per_turn", 0)
-
-        # 战术增强
-        state.active_benefits = data.get("active_benefits", [])
-        state.scene_objects = data.get("scene_objects", [])
-        state.npc_assist_log = data.get("npc_assist_log", [])
 
         # 结局与死亡
         state.ending_triggered = data.get("ending_triggered", False)
@@ -1003,464 +992,89 @@ D- "藏起来观察，等他的同伴来" (DC8, 被动但信息丰富，REFLEX)
 """
 
     def _default_analysis(self, action: str, state: GameState) -> Dict:
-        """默认分析（用于无LLM时的回退）- v4.6.0增强版：自动提取NPC、更精细的DC评估"""
-        action_lower = action.lower()
-        detected_npcs = self._extract_npc_names(action)
-
-        # 判断行动类型和属性（更精细的关键词匹配）
-        if any(w in action_lower for w in ["打", "杀", "战", "攻", "fight", "attack", "击", "斗", "战", "殴"]):
-            return {
-                "intention": "进行战斗",
-                "action_type": "战斗",
-                "primary_attribute": "FORCE",
-                "base_dc": 12,
-                "dc_reasoning": "标准战斗难度，中等",
-                "risks": ["受伤", "敌人警觉"],
-                "required_items": [],
-                "required_knowledge": [],
-                "detected_npcs": detected_npcs
-            }
-        elif any(w in action_lower for w in ["说服", "劝", "辩", "论", "persuade", "convince", "bribe", "intimidate"]):
-            return {
-                "intention": "进行高难度社交",
-                "action_type": "社交",
-                "primary_attribute": "INFLUENCE",
-                "base_dc": 12,
-                "dc_reasoning": "说服或争辩，需面对立场不同的人，中等偏难",
-                "risks": ["被识破", "关系恶化"],
-                "required_items": [],
-                "required_knowledge": [],
-                "detected_npcs": detected_npcs
-            }
-        elif any(w in action_lower for w in ["说", "谈", "聊", "叙", "见", "迎", "待", "陪", "social", "talk", "chat"]):
-            return {
-                "intention": "进行社交互动",
-                "action_type": "社交",
-                "primary_attribute": "INFLUENCE",
-                "base_dc": 8,
-                "dc_reasoning": "社交互动，有对话对象，中等难度",
-                "risks": ["对方反感", "信息泄露"],
-                "required_items": [],
-                "required_knowledge": [],
-                "detected_npcs": detected_npcs
-            }
-        elif any(w in action_lower for w in ["偷", "躲", "潜", "hide", "steal", "避", "藏", "回避"]):
-            return {
-                "intention": "进行潜行",
-                "action_type": "潜行",
-                "primary_attribute": "REFLEX",
-                "base_dc": 11,
-                "dc_reasoning": "标准潜行难度，中等",
-                "risks": ["被发现", "陷入包围"],
-                "required_items": [],
-                "required_knowledge": [],
-                "detected_npcs": detected_npcs
-            }
-        elif any(w in action_lower for w in ["读", "写", "作", "诗", "词", "文", "书", "画", "研", "思", "想", "学", "问", "书", "创作", "创作", "作"]):
-            return {
-                "intention": "进行文学创作或智力活动",
-                "action_type": "文学",
-                "primary_attribute": "MIND",
-                "base_dc": 10,
-                "dc_reasoning": "文学或智力活动，需要才华和积累，中等",
-                "risks": ["才思枯竭", "作品不佳遭人嘲笑"],
-                "required_items": [],
-                "required_knowledge": [],
-                "detected_npcs": detected_npcs
-            }
-        else:
-            return {
-                "intention": "进行一般行动",
-                "action_type": "通用",
-                "primary_attribute": "MIND",
-                "base_dc": 7,
-                "dc_reasoning": "一般行动，较简单",
-                "risks": ["失败"],
-                "required_items": [],
-                "required_knowledge": [],
-                "detected_npcs": detected_npcs
-            }
-
-    @staticmethod
-    def _extract_npc_names(text: str) -> List[str]:
-        """从玩家输入中提取潜在的中文NPC名称 (v4.6.0增强)"""
-        # 常见中文姓氏列表
-        surnames = {
-            "严", "沈", "周", "苏", "李", "王", "张", "刘", "陈", "杨", "赵", "黄", "吴", "孙", "徐",
-            "胡", "朱", "高", "林", "何", "郭", "马", "罗", "梁", "宋", "郑", "谢", "韩", "唐", "冯",
-            "于", "董", "萧", "程", "曹", "袁", "邓", "许", "傅", "曾", "彭", "吕", "卢", "蒋", "蔡",
-            "贾", "丁", "魏", "薛", "叶", "阎", "余", "潘", "杜", "戴", "夏", "钟", "汪", "田", "任",
-            "姜", "范", "方", "石", "姚", "谭", "廖", "邹", "熊", "金", "陆", "郝", "孔", "白", "崔",
-            "康", "毛", "邱", "秦", "江", "史", "顾", "侯", "邵", "孟", "龙", "万", "段", "雷", "钱",
-            "汤", "尹", "黎", "易", "常", "武", "乔", "贺", "赖", "龚", "文", "庞", "樊", "兰", "殷",
-            "施", "陶", "洪", "翟", "安", "颜", "倪", "牛", "温", "芦", "季", "俞", "章", "鲁", "葛",
-            "伍", "韦", "申", "尤", "毕", "聂", "丛", "焦", "向", "柳", "邢", "路", "岳", "齐", "梅",
-            "莫", "庄", "辛", "管", "祝", "左", "涂", "谷", "祁", "时", "舒", "耿", "牟", "卜", "肖",
-            "詹", "关", "苗", "凌", "费", "纪", "靳", "盛", "童", "欧", "甄", "项", "曲", "成", "游",
-            "阳", "裴", "席", "卫", "查", "屈", "鲍", "位", "覃", "霍", "翁", "隋", "植", "甘", "景",
-            "薄", "单", "包", "司", "柏", "宁", "柯", "阮", "桂", "闵", "解", "强", "柴", "华", "车",
-            "冉", "房", "边", "净", "阴", "闫", "佘", "练", "骆", "付", "代", "麦", "容", "肇", "宾",
-            "家", "苑", "乌", "南宫", "欧阳", "司马", "上官", "夏侯", "诸葛", "公孙", "宇文", "慕容",
-            "老太", "老太君", "管家", "门客", "丫鬟", "书童", "歌姬", "掌事", "女官", "皇帝", "官家",
-            "侍郎", "大人", "员外", "姑娘", "公子", "少爷", "小姐", "夫人", "老爷", "夫人"
-        }
-        # 停用词：姓氏后面不应该跟这些词
-        stopwords = {
-            "的", "了", "是", "在", "有", "和", "与", "或", "但", "而", "因为", "所以",
-            "如果", "虽然", "尽管", "不仅", "而且", "一边", "一边", "一方面", "另一方面",
-            "大家", "人们", "我们", "你们", "他们", "它们", "她们", "自己", "别人",
-            "大人", "老人", "女人", "男人", "小人", "个人", "家人", "夫人", "主人",
-            "家人", "客人", "行人", "名人", "新人", "文人", "武人", "商人", "工人",
-            "老人", "少人", "多人", "何人", "某人", "何人", "人人", "每人",
-            "如何", "为何", "因为", "以为", "认为", "以为", "所谓", "所谓",
-            "王府", "皇宫", "府邸", "府中", "府上", "府里", "府内", "府外",
-            "家中", "家里", "家中", "宅中", "宅内", "院内", "屋内", "厅内",
-            "什么", "怎么", "怎样", "如何", "多少", "几", "谁", "哪", "那个", "那些",
-            "这个", "这些", "这里", "那里", "哪里", "这边", "那边", "一边",
-            "一个", "两个", "几个", "一些", "许多", "不少", "很多", "太多",
-            "起来", "下去", "过来", "过去", "进去", "出去", "上来", "下去",
-            "公子", "少爷", "小姐", "老爷", "夫人", "姑娘", "少龙", "妾身",
-            "小的", "小的", "奴才", "奴家", "老奴", "老身", "民女", "草民",
-            "在下", "鄙人", "不才", "在下", "小弟", "兄长", "姐姐", "妹妹",
-            "婆婆", "公公", "媳妇", "女婿", "姑姑", "舅舅", "阿姨", "叔叔",
-            "伯伯", "婶婶", "舅妈", "姑父", "姨父", "嫂子", "弟妹", "姐夫",
-            "妹夫", "堂兄", "堂弟", "堂姐", "堂妹", "表兄", "表弟", "表姐", "表妹",
-            "父亲", "母亲", "爹", "娘", "爸", "妈", "祖父", "祖母", "爷爷", "奶奶",
-            "外公", "外婆", "姥爷", "姥姥", "哥哥", "弟弟", "姐姐", "妹妹",
-            "儿子", "女儿", "孙子", "孙女", "侄子", "侄女", "外甥", "外甥女",
-            "老师", "学生", "师傅", "徒弟", "师兄", "师弟", "师姐", "师妹",
-            "陛下", "殿下", "大人", "将军", "丞相", "宰相", "尚书", "侍郎",
-            "状元", "榜眼", "探花", "进士", "举人", "秀才", "童生", "书生",
-            "道士", "和尚", "尼姑", "方丈", "主持", "掌柜", "伙计", "小二",
-            "老板", "老板娘", "厨子", "丫鬟", "仆人", "侍女", "侍卫", "护卫",
-            "车夫", "马夫", "渔夫", "樵夫", "农夫", "工匠", "艺人", "戏子",
-            "歌女", "舞女", "妓女", "老鸨", "龟公", "打手", "混混", "流氓",
-            "乞丐", "叫花", "骗子", "小偷", "强盗", "土匪", "山贼", "海盗",
-            "刺客", "杀手", "间谍", "密探", "探子", "信使", "邮差", "郎中",
-            "大夫", "药师", "算命", "相师", "风水", "道士", "巫师", "神婆",
+        """默认分析（无LLM时的极简回退）"""
+        return {
+            "intention": "进行一般行动",
+            "action_type": "通用",
+            "primary_attribute": "MIND",
+            "base_dc": 10,
+            "dc_reasoning": "默认配置",
+            "risks": ["失败"],
+            "required_items": [],
+            "required_knowledge": [],
+            "detected_npcs": []
         }
 
-        found = set()
-        text_len = len(text)
-        i = 0
-        while i < text_len:
-            char = text[i]
-            # 检查当前字符是否是一个姓氏的开头
-            # 优先匹配复姓（2字）
-            matched_surname = None
-            surname_len = 0
-            for s in sorted(surnames, key=len, reverse=True):
-                if text[i:i+len(s)] == s:
-                    matched_surname = s
-                    surname_len = len(s)
-                    break
-            if matched_surname:
-                # 尝试提取名字：姓氏后面跟1-2个字
-                name_parts = []
-                j = i + surname_len
-                name_chars = 0
-                while j < text_len and name_chars < 2:
-                    c = text[j]
-                    # 如果碰到标点、空格、英文，停止
-                    if not ('一' <= c <= '鿿'):
-                        break
-                    name_parts.append(c)
-                    name_chars += 1
-                    j += 1
-                full_name = matched_surname + ''.join(name_parts)
-                # 过滤：排除纯姓氏和停用词
-                if full_name not in stopwords and full_name != matched_surname:
-                    # 额外检查：名字不能全是常见虚词
-                    if not all(c in {"的", "了", "是", "在", "有", "和", "与", "或", "但", "而"} for c in name_parts):
-                        found.add(full_name)
-                # 移动指针到姓氏后面
-                i += surname_len
-            else:
-                i += 1
-
-        return sorted(list(found))
 
     def _default_options(self, state: GameState) -> Dict:
-        """默认选项（用于无LLM时的回退）- 剧情导向设计"""
-        # 基于回合数轮换不同的情境模板，展示多样化的剧情选项
-        templates = [
-            {
-                "context": f"你站在{state.current_scene}的十字路口，前方传来奇怪的声音...",
-                "options": [
-                    {
-                        "letter": "A",
-                        "description": "握紧武器，大步走向声音来源",
-                        "action": "毫不畏惧地走向声音来源，准备面对任何危险",
-                        "dc_hint": 12,
-                        "attr_hint": "FORCE"
-                    },
-                    {
-                        "letter": "B",
-                        "description": "躲进阴影，先观察情况",
-                        "action": "悄悄躲进附近的阴影中，仔细观察声音来源",
-                        "dc_hint": 7,
-                        "attr_hint": "REFLEX"
-                    },
-                    {
-                        "letter": "C",
-                        "description": "大声喊话，试图交流",
-                        "action": "朝声音方向喊话，表明自己没有敌意，试图沟通",
-                        "dc_hint": 9,
-                        "attr_hint": "INFLUENCE"
-                    },
-                    {
-                        "letter": "D",
-                        "description": "分析环境，寻找其他路径",
-                        "action": "冷静分析周围环境，寻找可以绕行的安全路径",
-                        "dc_hint": 8,
-                        "attr_hint": "MIND"
-                    }
-                ]
-            },
-            {
-                "context": f"一个陌生人拦住了你，眼神中带着试探...",
-                "options": [
-                    {
-                        "letter": "A",
-                        "description": "坦诚相待，说出真实目的",
-                        "action": "直视对方的眼睛，坦诚地说出自己的真实目的",
-                        "dc_hint": 9,
-                        "attr_hint": "INFLUENCE"
-                    },
-                    {
-                        "letter": "B",
-                        "description": "编造谎言，试探对方反应",
-                        "action": "编造一个半真半假的故事，观察对方的反应",
-                        "dc_hint": 12,
-                        "attr_hint": "MIND"
-                    },
-                    {
-                        "letter": "C",
-                        "description": "保持沉默，让对方先开口",
-                        "action": "冷冷地看着对方，一言不发，等待对方表明来意",
-                        "dc_hint": 8,
-                        "attr_hint": "LUCK"
-                    },
-                    {
-                        "letter": "D",
-                        "description": "手按剑柄，警告对方不要挡路",
-                        "action": "手按在武器上，用肢体语言表明自己不想惹事但也不怕事",
-                        "dc_hint": 11,
-                        "attr_hint": "FORCE"
-                    }
-                ]
-            },
-            {
-                "context": f"你发现了一个可疑的线索，但时间紧迫...",
-                "options": [
-                    {
-                        "letter": "A",
-                        "description": "仔细搜查，不放过任何细节",
-                        "action": "花时间仔细搜查现场，寻找所有可能的线索",
-                        "dc_hint": 7,
-                        "attr_hint": "MIND"
-                    },
-                    {
-                        "letter": "B",
-                        "description": "拿上明显的东西就走",
-                        "action": "只拿取最明显、最有价值的物品，尽快离开",
-                        "dc_hint": 10,
-                        "attr_hint": "REFLEX"
-                    },
-                    {
-                        "letter": "C",
-                        "description": "设置陷阱，以防有人跟踪",
-                        "action": "在离开前设置一个简单的警报陷阱，防止被跟踪",
-                        "dc_hint": 13,
-                        "attr_hint": "MIND"
-                    },
-                    {
-                        "letter": "D",
-                        "description": "破坏现场，不留下痕迹",
-                        "action": "故意破坏现场，让别人无法追踪你的行踪",
-                        "dc_hint": 11,
-                        "attr_hint": "FORCE"
-                    }
-                ]
-            }
-        ]
-
-        # 根据回合数选择模板
-        template_index = (state.turn_count // 3) % len(templates)
-        selected = templates[template_index]
-
+        """默认选项（无LLM时的极简回退）"""
         return {
-            "context": selected["context"],
-            "options": selected["options"],
+            "context": f"当前场景：{state.current_scene}",
+            "options": [
+                {
+                    "letter": "A",
+                    "description": "谨慎行动",
+                    "action": "采取谨慎的行动",
+                    "dc_hint": 8,
+                    "attr_hint": "MIND"
+                },
+                {
+                    "letter": "B",
+                    "description": "直接行动",
+                    "action": "采取直接的行动",
+                    "dc_hint": 10,
+                    "attr_hint": "FORCE"
+                },
+                {
+                    "letter": "C",
+                    "description": "灵活应对",
+                    "action": "灵活地应对当前情况",
+                    "dc_hint": 8,
+                    "attr_hint": "REFLEX"
+                },
+                {
+                    "letter": "D",
+                    "description": "尝试交涉",
+                    "action": "尝试通过交涉解决问题",
+                    "dc_hint": 10,
+                    "attr_hint": "INFLUENCE"
+                }
+            ],
             "free_text": {
                 "description": "自定义行动（描述你想做的其他事情）"
             }
         }
 
     def _default_narrative(self, ctx: NarrativeContext) -> Dict:
-        """默认叙事（回退）- v4.6.0增强版：根据骰子结果和上下文生成有意义的后果"""
-        degree = ctx.check_result.degree
-        success = ctx.check_result.success
-        dc_level = ctx.dc_level
-        action = ctx.action
-        intention = ctx.intention
-        detected_npcs = ctx.detected_npcs
-
-        # 基础叙事模板
+        """默认叙事（无LLM时的极简回退）"""
         templates = {
             "大成功": "你完美地执行了计划，效果超出预期！",
             "成功": "你顺利地完成了行动。",
-            "勉强成功": "你完成了行动，但过程有些惊险，留下了些许隐患。",
-            "勉强失败": "你差一点就成功了，但最终还是失败了，不过尚有补救余地。",
-            "失败": "你的行动失败了，必须承担后果。",
-            "大失败": "灾难！你的行动彻底失败，还引发了额外的问题。"
+            "勉强成功": "你完成了行动，但过程有些惊险。",
+            "勉强失败": "你差一点就成功了。",
+            "失败": "你的行动失败了。",
+            "大失败": "灾难！你的行动彻底失败。"
         }
-        base_narrative = templates.get(degree, "行动结束。")
-
-        # ---- 构建 consequences ----
-        consequences = {
-            "attribute_changes": {},
-            "attribute_change_reasons": {},
-            "items_gained": [],
-            "items_lost": [],
-            "hp_change": 0,
-            "resource_changes": {},
-            "money_change": 0,
-            "status_effects_added": [],
-            "status_effects_removed": [],
-            "relationship_changes": {},
-            "npc_relationship_changes": {},
-            "flags_set": {},
-            "tags_gained": [],
-            "scene_change": ""
-        }
-
-        # 1. 属性变化：根据行动类型和骰子结果
-        attr_map = {
-            "战斗": "FORCE",
-            "文学": "MIND",
-            "社交": "INFLUENCE",
-            "潜行": "REFLEX",
-            "通用": "MIND"
-        }
-        primary_attr = attr_map.get(intention.split("进行")[-1].strip() if "进行" in intention else intention, "MIND")
-        # 重新匹配：intention 可能是 "进行战斗" 这样的格式
-        for key, val in attr_map.items():
-            if key in intention:
-                primary_attr = val
-                break
-
-        # 根据骰子结果程度决定属性变化
-        if success:
-            if degree == "大成功":
-                delta = 2
-            elif degree == "成功":
-                delta = 1
-            else:  # 勉强成功
-                delta = 1
-        else:
-            if degree == "大失败":
-                delta = -1  # 可能受伤或受挫
-            elif degree == "失败":
-                delta = 0
-            else:  # 勉强失败
-                delta = 0
-
-        if delta != 0:
-            consequences["attribute_changes"][primary_attr] = delta
-            reason_map = {
-                "FORCE": "战斗中力量精进" if success else "战斗中受挫",
-                "MIND": "才思敏捷，学识精进" if success else "思路受阻",
-                "INFLUENCE": "言辞得当，交际能力提升" if success else "言辞失当",
-                "REFLEX": "身手更加敏捷" if success else "行动受挫"
-            }
-            consequences["attribute_change_reasons"][primary_attr] = reason_map.get(primary_attr, "能力变化")
-
-        # 2. NPC 关系变化
-        if detected_npcs:
-            for npc in detected_npcs:
-                if success:
-                    if degree == "大成功":
-                        rel_delta = 15
-                        trust_delta = 10
-                    elif degree == "成功":
-                        rel_delta = 8
-                        trust_delta = 5
-                    else:  # 勉强成功
-                        rel_delta = 3
-                        trust_delta = 2
-                else:
-                    if degree == "大失败":
-                        rel_delta = -15
-                        trust_delta = -10
-                    elif degree == "失败":
-                        rel_delta = -8
-                        trust_delta = -5
-                    else:  # 勉强失败
-                        rel_delta = -3
-                        trust_delta = -2
-
-                consequences["npc_relationship_changes"][npc] = {
-                    "relationship": rel_delta,
-                    "trust": trust_delta,
-                    "memories": [{
-                        "event": f"回合互动：{action[:30]}",
-                        "type": "positive" if success else "negative",
-                        "turn": 0  # process_turn 后会自动更新
-                    }]
-                }
-
-        # 3. 根据 DC 等级决定额外收益（仅成功时）
-        if success and degree in ("大成功", "成功"):
-            if dc_level == "简单":
-                # 少量金钱或小幅关系
-                if degree == "大成功":
-                    consequences["money_change"] = 5
-            elif dc_level == "中等":
-                if degree == "大成功":
-                    consequences["money_change"] = 20
-                    # 可能获得一个标签
-                    if "文学" in intention or "诗" in action or "词" in action:
-                        consequences["tags_gained"].append("才思敏捷")
-                    elif "社交" in intention or "说" in action:
-                        consequences["tags_gained"].append("长袖善舞")
-                else:
-                    consequences["money_change"] = 10
-            elif dc_level in ("困难", "极难"):
-                if degree == "大成功":
-                    consequences["money_change"] = 50
-                    consequences["items_gained"].append({
-                        "id": "珍贵信物",
-                        "name": "珍贵信物",
-                        "type": "special",
-                        "quantity": 1,
-                        "description": "重要人物赠予的信物"
-                    })
-                else:
-                    consequences["money_change"] = 30
-
-        # 4. 失败时的代价
-        if not success:
-            if degree == "大失败":
-                consequences["hp_change"] = -10
-                consequences["status_effects_added"].append({
-                    "id": "羞辱",
-                    "name": "羞辱",
-                    "type": "debuff",
-                    "duration": 2,
-                    "effects": {"attributes": {"INFLUENCE": -2}},
-                    "pause_hp_decay": False
-                })
-            elif degree == "失败":
-                consequences["hp_change"] = -5
-
         return {
-            "narrative": base_narrative,
-            "consequences": consequences,
+            "narrative": templates.get(ctx.check_result.degree, "行动结束。"),
+            "consequences": {
+                "attribute_changes": {},
+                "attribute_change_reasons": {},
+                "items_gained": [],
+                "items_lost": [],
+                "hp_change": 0,
+                "resource_changes": {},
+                "money_change": 0,
+                "status_effects_added": [],
+                "status_effects_removed": [],
+                "npc_relationship_changes": {},
+                "flags_set": {},
+                "tags_gained": [],
+                "scene_change": ""
+            },
             "ending_triggered": False,
             "ending_type": ""
         }
-
 
 # ============ 核心游戏引擎 ============
 
@@ -1518,12 +1132,8 @@ class WorldlineSkill:
         self.state.status_effects = []
         self.state.attribute_history = {}
 
-        # 金钱系统：根据世界观设定初始金币和每回合金钱变化
-        self.state.money_per_turn = self._get_world_money_rate(world_setting)
-        # 初始金币：给世界观相关的启动资金
-        start_gold = self._get_world_start_gold(world_setting)
-        if start_gold > 0:
-            self.state.update_resource("金币", start_gold)
+        # 金钱系统：由LLM在世界观初始化时设定，不再硬编码
+        self.state.money_per_turn = 0
 
         # 生成游戏ID
         timestamp = int(datetime.now().timestamp())
@@ -1769,16 +1379,7 @@ class WorldlineSkill:
         for effect_id in consequences.get("status_effects_removed", []):
             self.state.remove_status_effect(effect_id)
 
-        # 关系变化（向后兼容：旧版扁平结构）
-        for npc, delta in consequences.get("relationship_changes", {}).items():
-            current = self.state.npcs.get(npc, {}).get("relationship", 0)
-            self.state.update_npc(npc, relationship=current + delta)
-            # 自动更新互动计数
-            ic = self.state.npcs[npc].get("interaction_count", 0) + 1
-            self.state.npcs[npc]["interaction_count"] = ic
-            self.state.npcs[npc]["last_interaction_turn"] = self.state.turn_count
-
-        # 完整NPC关系变化（新版多维结构）
+        # NPC关系变化
         for npc, changes in consequences.get("npc_relationship_changes", {}).items():
             if not isinstance(changes, dict):
                 continue
@@ -1896,233 +1497,6 @@ class WorldlineSkill:
             "death_triggered": death_triggered,
             "warnings": warnings
         }
-
-    # ------------------------------------------------------------------
-    # 战术增强系统（v4.3.0）
-    # 整合方案1（前置准备）+ 方案3（NPC协作）+ 方案4（环境互动）
-    # ------------------------------------------------------------------
-
-    def set_scene_objects(self, objects: List[Dict]) -> Dict:
-        """设置当前场景中的可互动物体。"""
-        self.state.scene_objects = objects
-        return {
-            "set_count": len(objects),
-            "objects": [{"id": o.get("id"), "name": o.get("name")} for o in objects]
-        }
-
-    def interact_with_scene_object(self, object_id: str, player_input: str) -> Dict:
-        """
-        玩家与场景物体互动。
-        成功后会将该物体对应的 benefit 加入 active_benefits。
-        """
-        obj = None
-        for o in self.state.scene_objects:
-            if o.get("id") == object_id:
-                obj = o
-                break
-
-        if not obj:
-            return {"error": f"场景中不存在物体: {object_id}"}
-
-        if obj.get("activated"):
-            return {"error": f"该物体已被互动过: {obj.get('name')}"}
-
-        # 调用标准回合流程处理互动本身
-        result = self.process_turn(player_input)
-
-        if "error" in result:
-            return result
-
-        # 若互动成功（成功或勉强成功），激活 benefit
-        if result.get("check", {}).get("success") or result.get("success"):
-            obj["activated"] = True
-            benefit = obj.get("benefit")
-            if benefit:
-                benefit["source"] = f"scene_object:{object_id}"
-                benefit["source_name"] = obj.get("name")
-                self.state.active_benefits.append(benefit)
-                result["activated_benefit"] = benefit
-
-        result["interacted_object"] = {"id": object_id, "name": obj.get("name")}
-        return result
-
-    def execute_npc_check(self, npc_name: str, action: str, attribute: str, dc: int) -> Dict:
-        """
-        为 NPC 执行一次 d20 检定，模拟 NPC 执行协任务的结果。
-        成功后自动为玩家添加一个 active_benefit。
-        """
-        # NPC 默认属性取 8-14（平凡人），关系好的 NPC 视为 +2
-        base_attr = 10
-        rel = self.state.npcs.get(npc_name, {}).get("relationship", 0)
-        rel_bonus = max(-2, min(4, rel // 20))  # -2 ~ +4
-        attr_value = max(1, min(20, base_attr + rel_bonus))
-
-        check_result = self.d20.execute_check(
-            attribute_value=attr_value,
-            dc=dc
-        )
-
-        log_entry = {
-            "turn": self.state.turn_count,
-            "npc": npc_name,
-            "action": action,
-            "attribute": attribute,
-            "dc": dc,
-            "check": check_result.to_dict()
-        }
-        self.state.npc_assist_log.append(log_entry)
-
-        result = {
-            "npc": npc_name,
-            "action": action,
-            "check": check_result.to_dict(),
-            "relationship_bonus": rel_bonus
-        }
-
-        # 大成功或成功：添加 benefit
-        if check_result.success:
-            benefit = {
-                "type": "npc_assist",
-                "name": f"{npc_name}的协助",
-                "description": f"{npc_name}成功执行了'{action}'，你接下来的相关行动获得加成",
-                "dc_modifier": -3 if check_result.degree in ["大成功", "成功"] else -1,
-                "advantage": check_result.degree == "大成功",
-                "applies_to": [attribute] if attribute else [],
-                "remaining_uses": 1,
-                "source": f"npc:{npc_name}"
-            }
-            self.state.active_benefits.append(benefit)
-            result["granted_benefit"] = benefit
-        else:
-            # 失败可能带来负面暗示
-            if check_result.degree in ["失败", "大失败"]:
-                result["warning"] = f"{npc_name}任务失败，敌方可能已警觉"
-
-        return result
-
-    def add_active_benefit(self, name: str, description: str, dc_modifier: int = 0,
-                           advantage: bool = False, applies_to: Optional[List[str]] = None,
-                           remaining_uses: int = 1) -> Dict:
-        """主持人手动添加一个战术加成（通常用于记录玩家的前置准备）。"""
-        benefit = {
-            "type": "manual",
-            "name": name,
-            "description": description,
-            "dc_modifier": dc_modifier,
-            "advantage": advantage,
-            "applies_to": applies_to or [],
-            "remaining_uses": remaining_uses,
-            "source": "host"
-        }
-        self.state.active_benefits.append(benefit)
-        return {"added": True, "benefit": benefit}
-
-    def consume_active_benefit(self, name: str) -> Optional[Dict]:
-        """按名称消耗一个 active_benefit。"""
-        for i, b in enumerate(self.state.active_benefits):
-            if b.get("name") == name:
-                b["remaining_uses"] -= 1
-                consumed = b.copy()
-                if b["remaining_uses"] <= 0:
-                    self.state.active_benefits.pop(i)
-                return {"consumed": consumed, "remaining": b.get("remaining_uses", 0)}
-        return None
-
-    def get_active_benefits(self, filter_attribute: Optional[str] = None) -> List[Dict]:
-        """获取当前所有可用的战术加成，可选按属性过滤。"""
-        self._clear_expired_benefits()
-        if not filter_attribute:
-            return [b.copy() for b in self.state.active_benefits]
-        return [
-            b.copy() for b in self.state.active_benefits
-            if not b.get("applies_to") or filter_attribute in b.get("applies_to", [])
-        ]
-
-    def calculate_effective_dc(self, base_dc: int, attribute: str) -> Dict:
-        """
-        计算经过所有可用加成后的最终 DC，以及是否获得 advantage。
-        """
-        self._clear_expired_benefits()
-        applicable = self.get_active_benefits(filter_attribute=attribute)
-
-        total_modifier = 0
-        has_advantage = False
-        applied_benefits = []
-
-        for b in applicable:
-            # 只计算未用完且有 DC 修正或 advantage 的 benefit
-            if b.get("remaining_uses", 0) > 0:
-                mod = b.get("dc_modifier", 0)
-                if mod:
-                    total_modifier += mod
-                    applied_benefits.append({"name": b["name"], "modifier": mod})
-                if b.get("advantage"):
-                    has_advantage = True
-                    applied_benefits.append({"name": b["name"], "effect": "advantage"})
-
-        effective_dc = max(1, base_dc + total_modifier)
-        return {
-            "base_dc": base_dc,
-            "attribute": attribute,
-            "applied_benefits": applied_benefits,
-            "total_modifier": total_modifier,
-            "effective_dc": effective_dc,
-            "advantage": has_advantage
-        }
-
-    def _clear_expired_benefits(self):
-        """清理已超过使用次数或来源不存在的过期 benefit。"""
-        # 简单的 TTL 机制：可以按回合数过期（未来扩展）
-        self.state.active_benefits = [
-            b for b in self.state.active_benefits
-            if b.get("remaining_uses", 0) > 0
-        ]
-
-    def _get_world_money_rate(self, world_setting: str) -> int:
-        """
-        根据世界观返回每回合基础金钱变化。
-        正数 = 收入（工资、补贴、租金等）
-        负数 = 开销（生活费、住宿费、维护费等）
-        """
-        setting_lower = world_setting.lower()
-        if any(w in setting_lower for w in ["赛博", "科幻", "现代", "都市", "未来", "cyber", "sci-fi", "modern"]):
-            return 5
-        if any(w in setting_lower for w in ["太空", "space", "星际", "歌剧"]):
-            return 8
-        if any(w in setting_lower for w in ["谍战", "特工", "间谍", "spy"]):
-            return 6
-        if any(w in setting_lower for w in ["武侠", "古风", "古代", "江湖", "wuxia", "kungfu"]):
-            return -2
-        if any(w in setting_lower for w in ["黑帮", "mafia", "gang", "黑手"]):
-            return -3
-        if any(w in setting_lower for w in ["克苏鲁", "cthulhu", "调查"]):
-            return -1
-        if any(w in setting_lower for w in ["奇幻", "魔法", "fantasy", "magic"]):
-            return -1
-        if any(w in setting_lower for w in ["末日", "废土", "post-apocalyptic", "wasteland"]):
-            return -4
-        return 0
-
-    def _get_world_start_gold(self, world_setting: str) -> int:
-        """根据世界观返回初始金币数量"""
-        setting_lower = world_setting.lower()
-        if any(w in setting_lower for w in ["赛博", "科幻", "现代", "都市", "cyber", "sci-fi", "modern"]):
-            return 200
-        if any(w in setting_lower for w in ["太空", "space", "星际"]):
-            return 500
-        if any(w in setting_lower for w in ["谍战", "特工", "spy"]):
-            return 300
-        if any(w in setting_lower for w in ["武侠", "古风", "wuxia", "kungfu"]):
-            return 50
-        if any(w in setting_lower for w in ["黑帮", "mafia", "gang", "黑手"]):
-            return 100
-        if any(w in setting_lower for w in ["克苏鲁", "cthulhu", "调查"]):
-            return 80
-        if any(w in setting_lower for w in ["奇幻", "魔法", "fantasy", "magic"]):
-            return 60
-        if any(w in setting_lower for w in ["末日", "废土", "post-apocalyptic", "wasteland"]):
-            return 20
-        return 50
 
     def save_game(self, save_id: str = None) -> str:
         """保存游戏（更新game.json，包含事件历史和NPC记忆）"""

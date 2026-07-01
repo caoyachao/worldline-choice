@@ -1,7 +1,7 @@
 {
   "name": "worldline-choice",
-  "version": "4.6.0",
-  "description": "AI驱动互动叙事游戏引擎 v4.6.0 - DC校准与收益版。在v4.5.0基础上引入DC校准体系（简单2-7/中等8-12/困难13-17）、收益与DC严格对应、统一存档系统（单文件game.json+事件压缩）、完整NPC关系系统。引擎层强制执行，LLM只需读取保存状态。禁止保存相关幻觉行为。",
+  ""version": "5.0.0",": "4.7.0",
+  "description": "AI驱动互动叙事游戏引擎 v4.7.0 - 精简版。移除冗余程序化代码：NPC名称提取器、复杂默认回退、战术增强系统、世界观硬编码金钱映射。LLM负责意图理解、DC评估、叙事生成、NPC识别和世界观初始化；引擎层保留d20客观检定、状态管理、存档管理和回合结算。",
   "author": "Worldline Team",
   "entry": "worldline_skill.py",
   "runtime": "python3",
@@ -34,7 +34,7 @@
     },
     {
       "name": "process_turn",
-      "description": "处理玩家的一个游戏回合。分析意图、执行d20检定、生成叙事。支持外部战术加成修正DC和应用优势/劣势",
+      "description": "处理玩家的一个游戏回合。分析意图、执行d20检定、生成叙事。支持优势/劣势",
       "parameters": {
         "type": "object",
         "properties": {
@@ -42,13 +42,9 @@
             "type": "string",
             "description": "玩家的自然语言行动描述"
           },
-          "dc_modifier": {
-            "type": "integer",
-            "description": "外部DC修正值（例如来自前置准备或环境互动的加成），默认0"
-          },
           "advantage": {
             "type": "boolean",
-            "description": "是否拥有优势（如NPC协助成功或环境互动激活），默认false"
+            "description": "是否拥有优势，默认false"
           },
           "disadvantage": {
             "type": "boolean",
@@ -191,145 +187,6 @@
       "parameters": {
         "type": "object",
         "properties": {}
-      }
-    },
-    {
-      "name": "set_scene_objects",
-      "description": "设置当前场景中的可互动物体（环境互动系统）",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "objects": {
-            "type": "array",
-            "description": "场景物体列表，每个元素包含 id, name, description, interaction_hint, benefit"
-          }
-        },
-        "required": ["objects"]
-      }
-    },
-    {
-      "name": "interact_with_scene_object",
-      "description": "玩家与场景中的指定物体互动。成功后该物体对应的 benefit 会自动加入 active_benefits",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "object_id": {
-            "type": "string",
-            "description": "物体ID"
-          },
-          "player_input": {
-            "type": "string",
-            "description": "玩家的互动行动描述"
-          }
-        },
-        "required": ["object_id", "player_input"]
-      }
-    },
-    {
-      "name": "execute_npc_check",
-      "description": "执行NPC的协助检定。成功后自动为玩家添加一个 active_benefit",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "npc_name": {
-            "type": "string",
-            "description": "NPC名称"
-          },
-          "action": {
-            "type": "string",
-            "description": "NPC执行的行动描述"
-          },
-          "attribute": {
-            "type": "string",
-            "enum": ["FORCE", "MIND", "INFLUENCE", "REFLEX", "RESILIENCE", "LUCK"],
-            "description": "检定时使用的属性"
-          },
-          "dc": {
-            "type": "integer",
-            "description": "难度等级"
-          }
-        },
-        "required": ["npc_name", "action", "attribute", "dc"]
-      }
-    },
-    {
-      "name": "add_active_benefit",
-      "description": "手动添加一个战术加成（通常用于记录玩家的前置准备成功）",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "加成名称"
-          },
-          "description": {
-            "type": "string",
-            "description": "加成描述"
-          },
-          "dc_modifier": {
-            "type": "integer",
-            "description": "DC修正值，例如-3表示降低3点DC"
-          },
-          "advantage": {
-            "type": "boolean",
-            "description": "是否提供优势"
-          },
-          "applies_to": {
-            "type": "array",
-            "items": { "type": "string" },
-            "description": "适用属性列表，空数组表示适用所有属性"
-          },
-          "remaining_uses": {
-            "type": "integer",
-            "description": "可使用次数，默认1"
-          }
-        },
-        "required": ["name", "description"]
-      }
-    },
-    {
-      "name": "consume_active_benefit",
-      "description": "按名称消耗一个 active_benefit",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "要消耗的加成名称"
-          }
-        },
-        "required": ["name"]
-      }
-    },
-    {
-      "name": "get_active_benefits",
-      "description": "获取当前所有可用的战术加成，可按属性过滤",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "filter_attribute": {
-            "type": "string",
-            "description": "可选，过滤适用某属性的加成"
-          }
-        }
-      }
-    },
-    {
-      "name": "calculate_effective_dc",
-      "description": "计算经过所有可用加成后的最终 DC 和 advantage 状态",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "base_dc": {
-            "type": "integer",
-            "description": "基础DC"
-          },
-          "attribute": {
-            "type": "string",
-            "description": "本次行动使用的属性"
-          }
-        },
-        "required": ["base_dc", "attribute"]
       }
     }
   ]

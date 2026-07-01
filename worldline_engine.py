@@ -366,40 +366,6 @@ class WorldlineEngine(WorldlineSkill):
             disadvantage=disadvantage,
         )
 
-    # ------------------------------------------------------------------
-    # 战术增强系统代理（v4.3.0）
-    # ------------------------------------------------------------------
-
-    def set_scene_objects(self, objects: List[Dict]) -> Dict:
-        """代理到 WorldlineSkill.set_scene_objects"""
-        return super().set_scene_objects(objects)
-
-    def interact_with_scene_object(self, object_id: str, player_input: str) -> Dict:
-        """代理到 WorldlineSkill.interact_with_scene_object"""
-        return super().interact_with_scene_object(object_id, player_input)
-
-    def execute_npc_check(self, npc_name: str, action: str, attribute: str, dc: int) -> Dict:
-        """代理到 WorldlineSkill.execute_npc_check"""
-        return super().execute_npc_check(npc_name, action, attribute, dc)
-
-    def add_active_benefit(self, name: str, description: str, dc_modifier: int = 0,
-                           advantage: bool = False, applies_to: Optional[List[str]] = None,
-                           remaining_uses: int = 1) -> Dict:
-        """代理到 WorldlineSkill.add_active_benefit"""
-        return super().add_active_benefit(name, description, dc_modifier, advantage, applies_to, remaining_uses)
-
-    def consume_active_benefit(self, name: str) -> Optional[Dict]:
-        """代理到 WorldlineSkill.consume_active_benefit"""
-        return super().consume_active_benefit(name)
-
-    def get_active_benefits(self, filter_attribute: Optional[str] = None) -> List[Dict]:
-        """代理到 WorldlineSkill.get_active_benefits"""
-        return super().get_active_benefits(filter_attribute)
-
-    def calculate_effective_dc(self, base_dc: int, attribute: str) -> Dict:
-        """代理到 WorldlineSkill.calculate_effective_dc"""
-        return super().calculate_effective_dc(base_dc, attribute)
-
 
 # ============ CLI 兼容层 ============
 

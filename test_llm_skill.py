@@ -654,15 +654,7 @@ def test_npc_relationship_system():
     assert len(npc["memories"]) == 2
     print("✓ consequences 完整关系变化正确")
 
-    # 测试6: 旧版 relationship_changes 向后兼容
-    skill._apply_consequences({
-        "relationship_changes": {"店小二": 3}
-    })
-    assert skill.state.npcs["店小二"]["relationship"] == 18  # 15+3
-    assert skill.state.npcs["店小二"]["interaction_count"] == 2
-    print("✓ 旧版 relationship_changes 向后兼容")
-
-    # 测试7: 边界限制（-100~100）
+    # 测试6: 边界限制（-100~100）
     skill.state.npcs["店小二"]["trust"] = 95
     skill._apply_consequences({
         "npc_relationship_changes": {"店小二": {"trust": 10}}
@@ -713,46 +705,27 @@ def test_npc_relationship_system():
 
 
 def test_dc_calibration():
-    """测试DC重新校准（2-7简单/8-12中等/13-17困难）"""
+    """测试默认回退 stubs 返回合理DC值"""
     print("="*60)
-    print("测试13: DC校准")
+    print("测试13: 默认回退DC值")
     print("="*60)
 
     skill = WorldlineSkill(show_dice=True)
     skill.start_game("武侠", "剑客", "李逍遥")
 
-    # 测试回退分析DC值
-    result = skill.llm._default_analysis("走路去市场", skill.state)
-    assert 2 <= result["base_dc"] <= 7, f"通用行动DC={result['base_dc']} 不在简单范围(2-7)"
-    print(f"✓ 通用行动DC={result['base_dc']}（简单范围）")
+    # 测试回退分析DC值（默认stub返回固定DC 10）
+    result = skill.llm._default_analysis("任何行动", skill.state)
+    assert result["base_dc"] == 10, f"默认分析DC={result['base_dc']} 不是10"
+    print(f"✓ 默认分析DC={result['base_dc']}（固定回退值）")
 
-    result = skill.llm._default_analysis("talk to someone", skill.state)
-    assert 2 <= result["base_dc"] <= 7, f"简单社交DC={result['base_dc']} 不在简单范围(2-7)"
-    print(f"✓ 简单社交DC={result['base_dc']}（简单范围）")
-
-    result = skill.llm._default_analysis("persuade the guard", skill.state)
-    assert 8 <= result["base_dc"] <= 12, f"说服陌生人DC={result['base_dc']} 不在中等范围(8-12)"
-    print(f"✓ 说服陌生人DC={result['base_dc']}（中等范围）")
-
-    result = skill.llm._default_analysis("fight enemy", skill.state)
-    assert 8 <= result["base_dc"] <= 12, f"战斗DC={result['base_dc']} 不在中等范围(8-12)"
-    print(f"✓ 战斗DC={result['base_dc']}（中等范围）")
-
-    result = skill.llm._default_analysis("hide from guards", skill.state)
-    assert 8 <= result["base_dc"] <= 12, f"潜行DC={result['base_dc']} 不在中等范围(8-12)"
-    print(f"✓ 潜行DC={result['base_dc']}（中等范围）")
-
-    # 测试默认选项DC范围
+    # 测试默认选项DC范围（默认stub返回DC 8和10）
     options = skill.llm._default_options(skill.state)
     dc_values = [opt.get("dc_hint", 0) for opt in options.get("options", [])]
     assert all(2 <= dc <= 17 for dc in dc_values), f"有选项DC超出范围: {dc_values}"
-    # 至少一个简单选项
-    assert any(dc <= 7 for dc in dc_values), f"没有简单选项(DC≤7): {dc_values}"
-    # 至少一个中等选项
-    assert any(8 <= dc <= 10 for dc in dc_values), f"没有中等选项(DC 8-10): {dc_values}"
-    print(f"✓ 默认选项DC范围正确: {dc_values}，含简单选项和中等选项")
+    assert any(dc <= 10 for dc in dc_values), f"没有简单或中等选项: {dc_values}"
+    print(f"✓ 默认选项DC范围正确: {dc_values}")
 
-    print("✓ DC校准测试通过\n")
+    print("✓ 默认回退DC值测试通过\n")
 
 
 def test_save_load_format():
